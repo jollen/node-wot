@@ -7,22 +7,38 @@
 #include "auxmods.h"
 #include "lrotable.h"
 
+#include "c_types.h"
+#include "c_stdio.h"
 #include "c_string.h"
 #include "c_stdlib.h"
+#include "os_type.h"
 
-#include "c_types.h"
 #include "mem.h"
 #include "espconn.h"
 #include "driver/uart.h"
 
-#include "coap.h"
+#include "er-coap-13.h"
+#include "er-coap-13-transactions.h"
 #include "uri.h"
-#include "node.h"
-#include "coap_timer.h"
-#include "coap_io.h"
-#include "coap_server.h"
 
-coap_queue_t *gQueue = NULL;
+#define DEBUG 0
+#if DEBUG
+#include <stdio.h>
+#define COAP_PRINTF c_printf
+#else
+#define COAP_PRINTF
+#endif
+
+/* Example URIs that can be queried. */
+#define NUMBER_OF_URLS 4
+/* leading and ending slashes only for demo purposes, get cropped automatically when setting the Uri-Path */
+char* service_urls[NUMBER_OF_URLS] = {".well-known/core", "/actuators/toggle", "battery/", "error/in//path"};
+
+struct request_state_t {
+    coap_transaction_t *transaction;
+    coap_packet_t *response;
+    uint32_t block_num;
+};
 
 typedef struct lcoap_userdata
 {
@@ -33,30 +49,14 @@ typedef struct lcoap_userdata
 
 static void coap_received(void *arg, char *pdata, unsigned short len)
 {
-  NODE_DBG("coap_received is called.\n");
-  struct espconn *pesp_conn = arg;
-  lcoap_userdata *cud = (lcoap_userdata *)pesp_conn->reverse;
-
-  // static uint8_t buf[MAX_MESSAGE_SIZE+1] = {0}; // +1 for string '\0'
-  uint8_t buf[MAX_MESSAGE_SIZE+1] = {0}; // +1 for string '\0'
-  c_memset(buf, 0, sizeof(buf)); // wipe prev data
-
-  if (len > MAX_MESSAGE_SIZE) {
-    NODE_DBG("Request Entity Too Large.\n"); // NOTE: should response 4.13 to client...
-    return;
-  }
-  // c_memcpy(buf, pdata, len);
-
-  size_t rsplen = coap_server_respond(pdata, len, buf, MAX_MESSAGE_SIZE+1);
-  espconn_sent(pesp_conn, (unsigned char *)buf, rsplen);
-
-  // c_memset(buf, 0, sizeof(buf));
+  COAP_PRINTF("coap_received is called.\n");
 }
 
 static void coap_sent(void *arg)
 {
-  NODE_DBG("coap_sent is called.\n");
+  COAP_PRINTF("coap_sent is called.\n");
 }
+
 
 // Lua: s = coap.create(function(conn))
 static int coap_create( lua_State* L, const char* mt )
@@ -94,12 +94,12 @@ static int coap_create( lua_State* L, const char* mt )
     return luaL_error(L, "not enough memory");
   }
   pesp_conn->state = ESPCONN_NONE;
-  NODE_DBG("UDP server/client is set.\n");
+  COAP_PRINTF("UDP server/client is set.\n");
 
   cud->L = L;
   pesp_conn->reverse = cud;
 
-  NODE_DBG("coap_create is called.\n");
+  COAP_PRINTF("coap_create is called.\n");
   return 1;  
 }
 
@@ -112,7 +112,7 @@ static int coap_delete( lua_State* L, const char* mt )
   cud = (lcoap_userdata *)luaL_checkudata(L, 1, mt);
   luaL_argcheck(L, cud, 1, "Server/Client expected");
   if(cud==NULL){
-    NODE_DBG("userdata is nil.\n");
+    COAP_PRINTF("userdata is nil.\n");
     return 0;
   }
 
@@ -133,173 +133,26 @@ static int coap_delete( lua_State* L, const char* mt )
     cud->pesp_conn = NULL;
   }
 
-  NODE_DBG("coap_delete is called.\n");
-  return 0;  
-}
-
-// Lua: server:listen( port, ip )
-static int coap_start( lua_State* L, const char* mt )
-{
-  struct espconn *pesp_conn = NULL;
-  lcoap_userdata *cud;
-  unsigned port;
-  size_t il;
-  ip_addr_t ipaddr;
-
-  cud = (lcoap_userdata *)luaL_checkudata(L, 1, mt);
-  luaL_argcheck(L, cud, 1, "Server/Client expected");
-  if(cud==NULL){
-    NODE_DBG("userdata is nil.\n");
-    return 0;
-  }
-
-  pesp_conn = cud->pesp_conn;
-  port = luaL_checkinteger( L, 2 );
-  pesp_conn->proto.udp->local_port = port;
-  NODE_DBG("UDP port is set: %d.\n", port);
-
-  if( lua_isstring(L,3) )   // deal with the ip string
-  {
-    const char *ip = luaL_checklstring( L, 3, &il );
-    if (ip == NULL)
-    {
-      ip = "0.0.0.0";
-    }
-    ipaddr.addr = ipaddr_addr(ip);
-    c_memcpy(pesp_conn->proto.udp->local_ip, &ipaddr.addr, 4);
-    NODE_DBG("UDP ip is set: ");
-    NODE_DBG(IPSTR, IP2STR(&ipaddr.addr));
-    NODE_DBG("\n");
-  }
-
-  if(LUA_NOREF==cud->self_ref){
-    lua_pushvalue(L, 1);  // copy to the top of stack
-    cud->self_ref = luaL_ref(L, LUA_REGISTRYINDEX);
-  }
-
-  espconn_regist_recvcb(pesp_conn, coap_received);
-  espconn_regist_sentcb(pesp_conn, coap_sent);
-  espconn_create(pesp_conn);
-
-  NODE_DBG("Coap Server started on port: %d\n", port);
-  NODE_DBG("coap_start is called.\n");
-  return 0;  
-}
-
-// Lua: server:close()
-static int coap_close( lua_State* L, const char* mt )
-{
-  struct espconn *pesp_conn = NULL;
-  lcoap_userdata *cud;
-
-  cud = (lcoap_userdata *)luaL_checkudata(L, 1, mt);
-  luaL_argcheck(L, cud, 1, "Server/Client expected");
-  if(cud==NULL){
-    NODE_DBG("userdata is nil.\n");
-    return 0;
-  }
-
-  if(cud->pesp_conn)
-  {
-    if(cud->pesp_conn->proto.udp->remote_port || cud->pesp_conn->proto.udp->local_port)
-      espconn_delete(cud->pesp_conn);
-  }
-
-  if(LUA_NOREF!=cud->self_ref){
-    luaL_unref(L, LUA_REGISTRYINDEX, cud->self_ref);
-    cud->self_ref = LUA_NOREF;
-  }
-
-  NODE_DBG("coap_close is called.\n");
+  COAP_PRINTF("coap_delete is called.\n");
   return 0;  
 }
 
 // Lua: server/client:on( "method", function(s) )
 static int coap_on( lua_State* L, const char* mt )
 {
-  NODE_DBG("coap_on is called.\n");
+  COAP_PRINTF("coap_on is called.\n");
   return 0;  
 }
 
 static void coap_response_handler(void *arg, char *pdata, unsigned short len)
 {
-  NODE_DBG("coap_response_handler is called.\n");
-  struct espconn *pesp_conn = arg;
+  COAP_PRINTF("coap_response_handler is called.\n");
+}
 
-  coap_packet_t pkt;
-  pkt.content.p = NULL;
-  pkt.content.len = 0;
-  // static uint8_t buf[MAX_MESSAGE_SIZE+1] = {0}; // +1 for string '\0'
-  uint8_t buf[MAX_MESSAGE_SIZE+1] = {0}; // +1 for string '\0'
-  c_memset(buf, 0, sizeof(buf)); // wipe prev data
-
-  int rc;
-  if( len > MAX_MESSAGE_SIZE )
-  {
-    NODE_DBG("Request Entity Too Large.\n"); // NOTE: should response 4.13 to client...
-    return;
-  }
-  c_memcpy(buf, pdata, len);
-
-  if (0 != (rc = coap_parse(&pkt, buf, len))){
-    NODE_DBG("Bad packet rc=%d\n", rc);
-  }
-  else
-  {
-#ifdef COAP_DEBUG
-    coap_dumpPacket(&pkt);
-#endif
-    /* check if this is a response to our original request */
-    if (!check_token(&pkt)) {
-      /* drop if this was just some message, or send RST in case of notification */
-      if (pkt.hdr.t == COAP_TYPE_CON || pkt.hdr.t == COAP_TYPE_NONCON){
-        // coap_send_rst(pkt);  // send RST response
-        // or, just ignore it.
-      }
-      goto end;
-    }
-
-    if (pkt.hdr.t == COAP_TYPE_RESET) {
-      NODE_DBG("got RST\n");
-      goto end;
-    }
-
-    uint32_t ip = 0, port = 0;
-    coap_tid_t id = COAP_INVALID_TID;
-
-    c_memcpy(&ip, pesp_conn->proto.udp->remote_ip, sizeof(ip));
-    port = pesp_conn->proto.udp->remote_port;
-
-    coap_transaction_id(ip, port, &pkt, &id);
-
-    /* transaction done, remove the node from queue */
-    // stop timer
-    coap_timer_stop();
-    // remove the node
-    coap_remove_node(&gQueue, id);
-    // calculate time elapsed
-    coap_timer_update(&gQueue);
-    coap_timer_start(&gQueue);
-
-    if (COAP_RESPONSE_CLASS(pkt.hdr.code) == 2)
-    {
-      /* There is no block option set, just read the data and we are done. */
-      NODE_DBG("%d.%02d\t", (pkt.hdr.code >> 5), pkt.hdr.code & 0x1F);
-      NODE_DBG((char *)pkt.payload.p);
-    }
-    else if (COAP_RESPONSE_CLASS(pkt.hdr.code) >= 4)
-    {
-      NODE_DBG("%d.%02d\t", (pkt.hdr.code >> 5), pkt.hdr.code & 0x1F);
-      NODE_DBG((char *)pkt.payload.p);
-    }
-  }
-
-end:
-  if(!gQueue){ // if there is no node pending in the queue, disconnect from host.
-    if(pesp_conn->proto.udp->remote_port || pesp_conn->proto.udp->local_port)
-      espconn_delete(pesp_conn);
-  }
-  // c_memset(buf, 0, sizeof(buf));
+void coap_blocking_request_callback(void *callback_data, void *response) {
+  struct request_state_t *state = (struct request_state_t *) callback_data;
+  state->response = (coap_packet_t*) response;
+  COAP_PRINTF("coap_blocking_request_callback is called.\n");
 }
 
 // Lua: client:request( [CON], uri, [payload] )
@@ -308,11 +161,16 @@ static int coap_request( lua_State* L, coap_method_t m )
   struct espconn *pesp_conn = NULL;
   lcoap_userdata *cud;
   int stack = 1;
+  static coap_packet_t request[1]; /* This way the packet can be treated as pointer as usual. */
+  static struct request_state_t state[1];
+  static uint8_t more;
+  static uint32_t res_block;
+  static uint8_t block_error;
 
   cud = (lcoap_userdata *)luaL_checkudata(L, stack, "coap_client");
   luaL_argcheck(L, cud, stack, "Server/Client expected");
   if(cud==NULL){
-    NODE_DBG("userdata is nil.\n");
+    COAP_PRINTF("userdata is nil.\n");
     return 0;
   }
 
@@ -326,7 +184,7 @@ static int coap_request( lua_State* L, coap_method_t m )
   {
     t = lua_tointeger(L, stack);
     stack++;
-    if ( t != COAP_TYPE_CON && t != COAP_TYPE_NONCON )
+    if ( t != COAP_TYPE_CON && t != COAP_TYPE_NON )
       return luaL_error( L, "wrong arg type" );
   } else {
     t = COAP_TYPE_CON; // default to CON
@@ -338,12 +196,13 @@ static int coap_request( lua_State* L, coap_method_t m )
   if (url == NULL)
     return luaL_error( L, "wrong arg type" );
 
+  // Get host/port from request URL
   coap_uri_t *uri = coap_new_uri(url, l);   // should call free(uri) somewhere
   if (uri == NULL)
     return luaL_error( L, "uri wrong format." );
 
   pesp_conn->proto.udp->remote_port = uri->port;
-  NODE_DBG("UDP port is set: %d.\n", uri->port);
+  COAP_PRINTF("UDP port is set: %d\n", uri->port);
   pesp_conn->proto.udp->local_port = espconn_port();
 
   if(uri->host.length){
@@ -351,21 +210,14 @@ static int coap_request( lua_State* L, coap_method_t m )
     host[uri->host.length] = '\0';
 
     ipaddr.addr = ipaddr_addr(host);
-    NODE_DBG("Host len(%d):", uri->host.length);
-    NODE_DBG(host);
-    NODE_DBG("\n");
+    COAP_PRINTF("Host len(%d):", uri->host.length);
+    COAP_PRINTF(host);
+    COAP_PRINTF("\n");
 
     c_memcpy(pesp_conn->proto.udp->remote_ip, &ipaddr.addr, 4);
-    NODE_DBG("UDP ip is set: ");
-    NODE_DBG(IPSTR, IP2STR(&ipaddr.addr));
-    NODE_DBG("\n");
-  }
-
-  coap_pdu_t *pdu = coap_new_pdu();   // should call coap_delete_pdu() somewhere
-  if(!pdu){
-    if(uri)
-      c_free(uri);
-    return;
+    COAP_PRINTF("UDP ip is set: ");
+    COAP_PRINTF(IPSTR, IP2STR(&ipaddr.addr));
+    COAP_PRINTF("\n");
   }
 
   const char *payload = NULL;
@@ -375,139 +227,56 @@ static int coap_request( lua_State* L, coap_method_t m )
     if (payload == NULL)
       l = 0;
   }
+  COAP_PRINTF("Payload: %s\n", payload);
+  COAP_PRINTF("URI Path: %s\n", uri->path.s);
+  COAP_PRINTF("URI Host: %s\n", host);
 
-  coap_make_request(&(pdu->scratch), pdu->pkt, t, m, uri, payload, l);
+  coap_init_message(request, COAP_TYPE_CON, m, 0);
+  coap_set_header_uri_path(request, uri->path.s);
+  coap_set_header_uri_host(request, host);
+  coap_set_payload(request, (uint8_t *)payload, strlen(payload));
 
-#ifdef COAP_DEBUG
-  coap_dumpPacket(pdu->pkt);
-#endif
+  espconn_regist_recvcb(pesp_conn, coap_response_handler);
+  espconn_create(pesp_conn);
 
-  int rc;
-  if (0 != (rc = coap_build(pdu->msg.p, &(pdu->msg.len), pdu->pkt))){
-    NODE_DBG("coap_build failed rc=%d\n", rc);
+  COAP_PRINTF("Creating a new CoAP transaction...\n");
+
+  request->mid = coap_get_mid();
+  if ((state->transaction = coap_new_transaction(request->mid, &ipaddr, uri->port)))
+  {
+    state->transaction->callback = coap_blocking_request_callback;
+    state->transaction->callback_data = state;
+    state->transaction->private = (void *)pesp_conn;
+
+    if (state->block_num>0)
+    {
+      coap_set_header_block2(request, state->block_num, 0, REST_MAX_CHUNK_SIZE);
+    }
+
+    // Build CoAP header and Options
+    state->transaction->packet_len = coap_serialize_message(request, state->transaction->packet);
+
+    COAP_PRINTF("Header dump: [0x%02X %02X %02X %02X]. Size: %d\n",
+        request->buffer[0],
+        request->buffer[1],
+        request->buffer[2],
+        request->buffer[3],
+        state->transaction->packet_len
+      );
+
+    coap_send_transaction(state->transaction);
+    COAP_PRINTF("Requested #%lu (MID %u)\n", state->block_num, request->mid);
   }
   else
   {
-#ifdef COAP_DEBUG
-    NODE_DBG("Sending: ");
-    coap_dump(pdu->msg.p, pdu->msg.len, true);
-    NODE_DBG("\n");
-#endif
-    espconn_regist_recvcb(pesp_conn, coap_response_handler);
-    sint8_t con = espconn_create(pesp_conn);
-    if( ESPCONN_OK != con){
-      NODE_DBG("Connect to host. code:%d\n", con);
-      // coap_delete_pdu(pdu);
-    } 
-    // else 
-    {
-      coap_tid_t tid = COAP_INVALID_TID;
-      if (pdu->pkt->hdr.t == COAP_TYPE_CON){
-        tid = coap_send_confirmed(pesp_conn, pdu);
-      }
-      else {
-        tid = coap_send(pesp_conn, pdu);
-      }
-      if (pdu->pkt->hdr.t != COAP_TYPE_CON || tid == COAP_INVALID_TID){
-        coap_delete_pdu(pdu);
-      }
-    }
+    COAP_PRINTF("Could not allocate transaction buffer");
   }
 
   if(uri)
     c_free((void *)uri);
 
-  NODE_DBG("coap_request is called.\n");
+  COAP_PRINTF("coap_request is called.\n");
   return 0;  
-}
-
-extern coap_luser_entry *variable_entry;
-extern coap_luser_entry *function_entry;
-// Lua: coap:var/func( string )
-static int coap_regist( lua_State* L, const char* mt, int isvar )
-{
-  size_t l;
-  const char *name = luaL_checklstring( L, 2, &l );
-  if (name == NULL)
-    return luaL_error( L, "name must be set." );
-
-  coap_luser_entry *h = NULL;
-  // if(lua_isstring(L, 3))
-  if(isvar)
-    h = variable_entry;
-  else
-    h = function_entry;
-
-  while(NULL!=h->next){  // goto the end of the list
-    if(h->name!= NULL && c_strcmp(h->name, name)==0)  // key exist, override it
-      break;
-    h = h->next;
-  }
-
-  if(h->name==NULL || c_strcmp(h->name, name)!=0){   // not exists. make a new one.
-    h->next = (coap_luser_entry *)c_zalloc(sizeof(coap_luser_entry));
-    h = h->next;
-    if(h == NULL)
-      return luaL_error(L, "not enough memory");
-    h->next = NULL;
-    h->name = NULL;
-    h->L = NULL;
-  }  
-
-  h->L = L;
-  h->name = name;
-
-  NODE_DBG("coap_regist is called.\n");
-  return 0;  
-}
-
-// Lua: s = coap.createServer(function(conn))
-static int coap_createServer( lua_State* L )
-{
-  const char *mt = "coap_server";
-  return coap_create(L, mt);
-}
-
-// Lua: server:delete()
-static int coap_server_delete( lua_State* L )
-{
-  const char *mt = "coap_server";
-  return coap_delete(L, mt);
-}
-
-// Lua: server:listen( port, ip, function(err) )
-static int coap_server_listen( lua_State* L )
-{
-  const char *mt = "coap_server";
-  return coap_start(L, mt);
-}
-
-// Lua: server:close()
-static int coap_server_close( lua_State* L )
-{
-  const char *mt = "coap_server";
-  return coap_close(L, mt);
-}
-
-// Lua: server:on( "method", function(server) )
-static int coap_server_on( lua_State* L )
-{
-  const char *mt = "coap_server";
-  return coap_on(L, mt);
-}
-
-// Lua: server:var( "name" )
-static int coap_server_var( lua_State* L )
-{
-  const char *mt = "coap_server";
-  return coap_regist(L, mt, 1);
-}
-
-// Lua: server:func( "name" )
-static int coap_server_func( lua_State* L )
-{
-  const char *mt = "coap_server";
-  return coap_regist(L, mt, 0);
 }
 
 // Lua: s = coap.createClient(function(conn))
@@ -527,45 +296,36 @@ static int coap_client_gcdelete( lua_State* L )
 // client:get( string, function(sent) )
 static int coap_client_get( lua_State* L )
 {
-  return coap_request(L, COAP_METHOD_GET);
+  return coap_request(L, COAP_GET);
 }
 
 // client:post( string, function(sent) )
 static int coap_client_post( lua_State* L )
 {
-  return coap_request(L, COAP_METHOD_POST);
+  return coap_request(L, COAP_POST);
 }
 
 // client:put( string, function(sent) )
 static int coap_client_put( lua_State* L )
 {
-  return coap_request(L, COAP_METHOD_PUT);
+  return coap_request(L, COAP_PUT);
 }
 
 // client:delete( string, function(sent) )
 static int coap_client_delete( lua_State* L )
 {
-  return coap_request(L, COAP_METHOD_DELETE);
+  return coap_request(L, COAP_DELETE);
 }
 
 // Module function map
 #define MIN_OPT_LEVEL 2
 #include "lrodefs.h"
-static const LUA_REG_TYPE coap_server_map[] =
-{
-  { LSTRKEY( "listen" ), LFUNCVAL ( coap_server_listen ) },
-  { LSTRKEY( "close" ), LFUNCVAL ( coap_server_close ) },
-  { LSTRKEY( "var" ), LFUNCVAL ( coap_server_var ) },
-  { LSTRKEY( "func" ), LFUNCVAL ( coap_server_func ) },
-  { LSTRKEY( "__gc" ), LFUNCVAL ( coap_server_delete ) },
-#if LUA_OPTIMIZE_MEMORY > 0
-  { LSTRKEY( "__index" ), LROVAL ( coap_server_map ) },
-#endif
-  { LNILKEY, LNILVAL }
-};
 
 static const LUA_REG_TYPE coap_client_map[] =
 {
+  // -- Make a GET/POST/PUT/DELETE request
+  // uri = "coap://localhost:8000/object/12345/send"
+  // cc:post(uri, "{}")
   { LSTRKEY( "get" ), LFUNCVAL ( coap_client_get ) },
   { LSTRKEY( "post" ), LFUNCVAL ( coap_client_post ) },
   { LSTRKEY( "put" ), LFUNCVAL ( coap_client_put ) },
@@ -579,11 +339,12 @@ static const LUA_REG_TYPE coap_client_map[] =
 
 const LUA_REG_TYPE coap_map[] = 
 {
-  { LSTRKEY( "Server" ), LFUNCVAL ( coap_createServer ) },
+  // -- Create a CoAP client
+  // cc = coap.Client()
   { LSTRKEY( "Client" ), LFUNCVAL ( coap_createClient ) },
 #if LUA_OPTIMIZE_MEMORY > 0
   { LSTRKEY( "CON" ), LNUMVAL( COAP_TYPE_CON ) },
-  { LSTRKEY( "NON" ), LNUMVAL( COAP_TYPE_NONCON ) },
+  { LSTRKEY( "NON" ), LNUMVAL( COAP_TYPE_NON ) },
 
   { LSTRKEY( "__metatable" ), LROVAL( coap_map ) },
 #endif
@@ -592,9 +353,7 @@ const LUA_REG_TYPE coap_map[] =
 
 LUALIB_API int luaopen_coap( lua_State *L )
 {
-  endpoint_setup();
 #if LUA_OPTIMIZE_MEMORY > 0
-  luaL_rometatable(L, "coap_server", (void *)coap_server_map);  // create metatable for coap_server 
   luaL_rometatable(L, "coap_client", (void *)coap_client_map);  // create metatable for coap_client  
   return 0;
 #else // #if LUA_OPTIMIZE_MEMORY > 0
@@ -610,15 +369,6 @@ LUALIB_API int luaopen_coap( lua_State *L )
   MOD_REG_NUMBER( L, "NON", COAP_TYPE_NONCON );
 
   n = lua_gettop(L);
-
-  // create metatable
-  luaL_newmetatable(L, "coap_server");
-  // metatable.__index = metatable
-  lua_pushliteral(L, "__index");
-  lua_pushvalue(L,-2);
-  lua_rawset(L,-3);
-  // Setup the methods inside metatable
-  luaL_register( L, NULL, coap_server_map );
 
   lua_settop(L, n);
   // create metatable
