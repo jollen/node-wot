@@ -266,13 +266,15 @@ static int coap_request( lua_State* L, coap_method_t m )
 
     coap_send_transaction(state->transaction);
     COAP_PRINTF("Requested #%lu (MID %u)\n", state->block_num, request->mid);
+
+    coap_clear_transaction(state->transaction);
   }
   else
   {
     COAP_PRINTF("Could not allocate transaction buffer");
-  }
+  }    
 
-  if(uri)
+  if (uri)
     c_free((void *)uri);
 
   COAP_PRINTF("coap_request is called.\n");
