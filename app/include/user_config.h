@@ -1,7 +1,7 @@
 #ifndef __USER_CONFIG_H__
 #define __USER_CONFIG_H__
 
-// #define DEVKIT_VERSION_0_9 1 	// define this only if you use NodeMCU devkit v0.9
+#define DEVKIT_VERSION_0_9 1 	// define this only if you use NodeMCU devkit v0.9
 
 // #define FLASH_512K
 // #define FLASH_1M
