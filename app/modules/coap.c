@@ -20,6 +20,7 @@
 #include "er-coap-13.h"
 #include "er-coap-13-transactions.h"
 #include "uri.h"
+#include "pt.h"
 
 #define DEBUG 0
 #if DEBUG
@@ -35,9 +36,10 @@
 char* service_urls[NUMBER_OF_URLS] = {".well-known/core", "/actuators/toggle", "battery/", "error/in//path"};
 
 struct request_state_t {
-    coap_transaction_t *transaction;
-    coap_packet_t *response;
-    uint32_t block_num;
+  struct pt pt;
+  coap_transaction_t *transaction;
+  coap_packet_t *response;
+  uint32_t block_num;
 };
 
 typedef struct lcoap_userdata
