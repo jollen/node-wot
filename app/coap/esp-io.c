@@ -68,7 +68,7 @@
  */
 int coap_send_message(coap_transaction_t *t, uint8_t *data, uint16_t length) 
 {
-  struct espconn *espconn = (struct espconn *)t->private;
+  struct espconn *espconn = (struct espconn *)t->context;
   struct espconn_msg *pnode = NULL;
   bool value = false;
    

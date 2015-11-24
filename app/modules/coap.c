@@ -30,6 +30,8 @@
 #define COAP_PRINTF
 #endif
 
+#define MAX_MESSAGE_SIZE 1152
+
 /* Example URIs that can be queried. */
 #define NUMBER_OF_URLS 4
 /* leading and ending slashes only for demo purposes, get cropped automatically when setting the Uri-Path */
@@ -146,15 +148,97 @@ static int coap_on( lua_State* L, const char* mt )
   return 0;  
 }
 
+/*
+ * ESP8266 connection response callback
+ */
 static void coap_response_handler(void *arg, char *pdata, unsigned short len)
 {
   COAP_PRINTF("coap_response_handler is called.\n");
+
+  struct espconn *pesp_conn = (struct espconn *)arg;
+  coap_status_t rc;
+  coap_packet_t response;
+
+  uint8_t buf[MAX_MESSAGE_SIZE+1] = {0}; // +1 for string '\0'
+  uint8_t token[COAP_TOKEN_LEN+1] = {0};
+
+  c_memset(buf, 0, sizeof(buf)); // wipe prev data
+
+  if( len > MAX_MESSAGE_SIZE )
+  {
+    COAP_PRINTF("Request Entity Too Large.\n"); // NOTE: should response 4.13 to client...
+    return;
+  }
+  c_memcpy(buf, pdata, len);
+
+  rc =  coap_parse_message(&response, buf, (uint16_t)len);
+
+  switch (rc) {
+  case BAD_REQUEST_4_00:
+    COAP_PRINTF("Bad request rc=%d\n", rc);
+    break;
+  case NO_ERROR:
+    COAP_PRINTF("Server response OK.\n");
+    break;
+  }
+
+end:
+  /*
+   * Check token (TBD)
+   */
+  coap_get_header_token(&response, (const uint8_t **)&token);
 }
 
+/*
+ * CoAP request transaction callbock
+ */
 void coap_blocking_request_callback(void *callback_data, void *response) {
   struct request_state_t *state = (struct request_state_t *) callback_data;
   state->response = (coap_packet_t*) response;
   COAP_PRINTF("coap_blocking_request_callback is called.\n");
+}
+
+coap_blocking_request(struct request_state_t *state,
+                                coap_packet_t *request,
+                                ip_addr_t *ipaddr,
+                                coap_uri_t *uri,
+                                void *context)
+{
+  struct espconn *pesp_conn = (struct espconn *)context;
+
+  request->mid = coap_get_mid();
+  
+  if ((state->transaction = coap_new_transaction(request->mid, ipaddr, uri->port)))
+  {
+    state->transaction->callback = coap_blocking_request_callback;
+    state->transaction->callback_data = state;
+    state->transaction->context = context;
+
+    if (state->block_num>0)
+    {
+      coap_set_header_block2(request, state->block_num, 0, REST_MAX_CHUNK_SIZE);
+    }
+
+    // Build CoAP header and Options
+    state->transaction->packet_len = coap_serialize_message(request, state->transaction->packet);
+
+    COAP_PRINTF("Header dump: [0x%02X %02X %02X %02X]. Size: %d\n",
+        request->buffer[0],
+        request->buffer[1],
+        request->buffer[2],
+        request->buffer[3],
+        state->transaction->packet_len
+      );
+
+    coap_send_transaction(state->transaction);
+    COAP_PRINTF("Requested #%lu (MID %u)\n", state->block_num, request->mid);
+
+    coap_clear_transaction(state->transaction);
+  }
+  else
+  {
+    COAP_PRINTF("Could not allocate transaction buffer");
+  }
 }
 
 // Lua: client:request( [CON], uri, [payload] )
@@ -163,8 +247,8 @@ static int coap_request( lua_State* L, coap_method_t m )
   struct espconn *pesp_conn = NULL;
   lcoap_userdata *cud;
   int stack = 1;
-  static coap_packet_t request[1]; /* This way the packet can be treated as pointer as usual. */
-  static struct request_state_t state[1];
+  coap_packet_t request[1]; /* This way the packet can be treated as pointer as usual. */
+  struct request_state_t state[1];
   static uint8_t more;
   static uint32_t res_block;
   static uint8_t block_error;
@@ -238,43 +322,18 @@ static int coap_request( lua_State* L, coap_method_t m )
   coap_set_header_uri_host(request, host);
   coap_set_payload(request, (uint8_t *)payload, strlen(payload));
 
+  COAP_PRINTF("Start CoAP transaction...\n");
+
+  /*
+   * Prepare ESP8266 connections
+   */
   espconn_regist_recvcb(pesp_conn, coap_response_handler);
   espconn_create(pesp_conn);
 
-  COAP_PRINTF("Creating a new CoAP transaction...\n");
-
-  request->mid = coap_get_mid();
-  if ((state->transaction = coap_new_transaction(request->mid, &ipaddr, uri->port)))
-  {
-    state->transaction->callback = coap_blocking_request_callback;
-    state->transaction->callback_data = state;
-    state->transaction->private = (void *)pesp_conn;
-
-    if (state->block_num>0)
-    {
-      coap_set_header_block2(request, state->block_num, 0, REST_MAX_CHUNK_SIZE);
-    }
-
-    // Build CoAP header and Options
-    state->transaction->packet_len = coap_serialize_message(request, state->transaction->packet);
-
-    COAP_PRINTF("Header dump: [0x%02X %02X %02X %02X]. Size: %d\n",
-        request->buffer[0],
-        request->buffer[1],
-        request->buffer[2],
-        request->buffer[3],
-        state->transaction->packet_len
-      );
-
-    coap_send_transaction(state->transaction);
-    COAP_PRINTF("Requested #%lu (MID %u)\n", state->block_num, request->mid);
-
-    coap_clear_transaction(state->transaction);
-  }
-  else
-  {
-    COAP_PRINTF("Could not allocate transaction buffer");
-  }    
+  /*
+   * Invoke blocking request
+   */
+  coap_blocking_request(state, request, &ipaddr, uri, (void *)pesp_conn);
 
   if (uri)
     c_free((void *)uri);
