@@ -82,15 +82,15 @@ COMPONENTS_eagle.app.v6 = 			\
 	libc/liblibc.a 				\
 	lua/liblua.a 				\
 	coap/coap.a 				\
-	mqtt/mqtt.a 				\
 	u8glib/u8glib.a 			\
-	smart/smart.a 				\
-	wofs/wofs.a 				\
+	mqtt/mqtt.a 				\
 	spiffs/spiffs.a 			\
 	cjson/libcjson.a 			\
 	crypto/libcrypto.a 			\
 	dhtlib/libdhtlib.a 			\
-	modules/libmodules.a
+	modules/libmodules.a 		\
+	smart/smart.a 				\
+	wofs/wofs.a 				
 
 LINKFLAGS_eagle.app.v6 = 			\
 	-L../lib 				\

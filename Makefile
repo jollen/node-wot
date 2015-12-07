@@ -75,7 +75,7 @@ else
     endif
 endif
 #############################################################
-ESPTOOL ?= ../tools/esptool.py
+ESPTOOL ?= esptool.py
 
 
 CSRCS ?= $(wildcard *.c)

@@ -45,6 +45,14 @@
 #define ROM_MODULES_COAP
 #endif
 
+#if defined(LUA_USE_MODULES_LWM2M)
+#define MODULES_LWM2M        "lwm2m"
+#define ROM_MODULES_LWM2M    \
+    _ROM(MODULES_LWM2M, luaopen_lwm2m, llwm_modulefuncs)
+#else
+#define ROM_MODULES_LWM2M
+#endif
+
 #if defined(LUA_USE_MODULES_MQTT)
 #define MODULES_MQTT        "mqtt"
 #define ROM_MODULES_MQTT    \

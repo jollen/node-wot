@@ -64,6 +64,9 @@ LUALIB_API int ( luaopen_wifi )( lua_State *L );
 #define AUXLIB_COAP     "coap"
 LUALIB_API int ( luaopen_coap )( lua_State *L );
 
+#define AUXLIB_LWM2M     "lwm2m"
+//LUALIB_API int ( luaopen_lwm2m )( lua_State *L );
+
 #define AUXLIB_MQTT     "mqtt"
 LUALIB_API int ( luaopen_mqtt )( lua_State *L );
 

@@ -66,12 +66,12 @@
 // Delcare a linked list.
 LIST(transactions_list);
 
-void
+void ICACHE_FLASH_ATTR
 coap_register_as_transaction_handler()
 {
 }
 
-coap_transaction_t *
+coap_transaction_t * ICACHE_FLASH_ATTR
 coap_new_transaction(uint16_t mid, ip_addr_t *ipaddr, uint16_t port)
 {
   coap_transaction_t *t = (coap_transaction_t *)c_zalloc(sizeof(coap_transaction_t));
@@ -90,7 +90,7 @@ coap_new_transaction(uint16_t mid, ip_addr_t *ipaddr, uint16_t port)
   return t;
 }
 
-void
+void ICACHE_FLASH_ATTR
 coap_send_transaction(coap_transaction_t *t)
 {
   PRINTF("Sending transaction %u\n", t->mid);
@@ -98,7 +98,7 @@ coap_send_transaction(coap_transaction_t *t)
   coap_send_message(t, t->packet, t->packet_len);
 }
 
-void
+void ICACHE_FLASH_ATTR
 coap_clear_transaction(coap_transaction_t *t)
 {
   if (t)
@@ -110,7 +110,7 @@ coap_clear_transaction(coap_transaction_t *t)
   }
 }
 
-coap_transaction_t *
+coap_transaction_t * ICACHE_FLASH_ATTR
 coap_get_transaction_by_mid(uint16_t mid)
 {
   coap_transaction_t *t = NULL;
@@ -126,7 +126,7 @@ coap_get_transaction_by_mid(uint16_t mid)
   return NULL;
 }
 
-void
+void ICACHE_FLASH_ATTR
 coap_check_transactions()
 {
   coap_transaction_t *t = NULL;

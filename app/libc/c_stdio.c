@@ -1103,4 +1103,16 @@ void c_sprintf(char *s, char *fmt, ...)
     va_end(arg);
 }
 
+int c_snprintf(char *s, size_t n, char *fmt, ...)
+{
+    int size;
+
+    va_list arg;
+    va_start(arg, fmt);
+    size = vsnprintf(s, n, fmt, arg);
+    va_end(arg);
+
+    return size;
+}
+
 #endif

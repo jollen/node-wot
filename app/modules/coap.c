@@ -25,9 +25,9 @@
 #define DEBUG 0
 #if DEBUG
 #include <stdio.h>
-#define COAP_PRINTF c_printf
+#define COAP_PRINTF(...) printf(__VA_ARGS__)
 #else
-#define COAP_PRINTF
+#define COAP_PRINTF(...)
 #endif
 
 #define MAX_MESSAGE_SIZE 1152

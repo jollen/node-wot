@@ -1,4 +1,3 @@
-
 #############################################################
 # Required variables for each makefile
 # Discard this section from all parent makefiles
@@ -12,8 +11,9 @@
 #     a generated lib/image xxx.a ()
 #
 ifndef PDIR
-GEN_LIBS = libmodules.a
+GEN_LIBS = lwm2m.a
 endif
+
 
 #############################################################
 # Configuration i.e. compile options etc.
@@ -38,18 +38,11 @@ endif
 
 INCLUDES := $(INCLUDES) -I $(PDIR)include
 INCLUDES += -I ./
+INCLUDES += -I ./include
+INCLUDES += -I ../include
+INCLUDES += -I ../../include
 INCLUDES += -I ../libc
-INCLUDES += -I ../coap
-INCLUDES += -I ../mqtt
-INCLUDES += -I ../u8glib
-INCLUDES += -I ../lua
 INCLUDES += -I ../platform
-INCLUDES += -I ../wofs
-INCLUDES += -I ../spiffs
-INCLUDES += -I ../smart
-INCLUDES += -I ../cjson
-INCLUDES += -I ../dhtlib
-INCLUDES += -I ../lwm2m
+INCLUDES += -I ../coap
 PDIR := ../$(PDIR)
 sinclude $(PDIR)Makefile
-

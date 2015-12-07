@@ -66,7 +66,8 @@
  *
  * @return -1 if error occured, 0 if success
  */
-int coap_send_message(coap_transaction_t *t, uint8_t *data, uint16_t length) 
+int ICACHE_FLASH_ATTR
+coap_send_message(coap_transaction_t *t, uint8_t *data, uint16_t length) 
 {
   struct espconn *espconn = (struct espconn *)t->context;
   struct espconn_msg *pnode = NULL;

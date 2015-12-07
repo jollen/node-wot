@@ -61,6 +61,7 @@ extern void output_redirect(const char *str);
 #else
 #include "c_stdarg.h"
 void c_sprintf(char* s,char *fmt, ...);
+int c_snprintf(char* s, size_t n, char *fmt, ...);
 #endif
 
 // #define c_vsprintf ets_vsprintf
