@@ -60,9 +60,12 @@ sample code bearing this copyright.
 #include "platform.h"
 #include "osapi.h"
 
-#define noInterrupts os_intr_lock
-#define interrupts os_intr_unlock
+#define noInterrupts ets_intr_lock
+#define interrupts ets_intr_unlock
 #define delayMicroseconds os_delay_us
+
+// 1 for keeping the parasitic power on H
+#define owDefaultPower 1
 
 #if ONEWIRE_SEARCH
 // global search state
@@ -74,7 +77,8 @@ static uint8_t LastDeviceFlag[NUM_OW];
 
 void onewire_init(uint8_t pin)
 {
-	platform_gpio_mode(pin, PLATFORM_GPIO_INPUT, PLATFORM_GPIO_PULLUP);
+	// pinMode(pin, INPUT);
+  platform_gpio_mode(pin, PLATFORM_GPIO_INPUT, PLATFORM_GPIO_PULLUP);
 #if ONEWIRE_SEARCH
 	onewire_reset_search(pin);
 #endif
@@ -175,7 +179,8 @@ void onewire_write(uint8_t pin, uint8_t v, uint8_t power /* = 0 */) {
   }
   if ( !power) {
   	noInterrupts();
-	platform_gpio_mode(pin, PLATFORM_GPIO_INPUT, PLATFORM_GPIO_FLOAT);
+  	DIRECT_MODE_INPUT(pin);
+  	DIRECT_WRITE_LOW(pin);
   	interrupts();
   }
 }
@@ -183,10 +188,11 @@ void onewire_write(uint8_t pin, uint8_t v, uint8_t power /* = 0 */) {
 void onewire_write_bytes(uint8_t pin, const uint8_t *buf, uint16_t count, bool power /* = 0 */) {
   uint16_t i;
   for (i = 0 ; i < count ; i++)
-    onewire_write(pin, buf[i], 1);
+    onewire_write(pin, buf[i], owDefaultPower);
   if (!power) {
     noInterrupts();
-	platform_gpio_mode(pin, PLATFORM_GPIO_INPUT, PLATFORM_GPIO_FLOAT);
+    DIRECT_MODE_INPUT(pin);
+    DIRECT_WRITE_LOW(pin);
     interrupts();
   }
 }
@@ -217,9 +223,9 @@ void onewire_select(uint8_t pin, const uint8_t rom[8])
 {
     uint8_t i;
 
-    onewire_write(pin, 0x55, 1);           // Choose ROM
+    onewire_write(pin, 0x55, owDefaultPower);           // Choose ROM
 
-    for (i = 0; i < 8; i++) onewire_write(pin, rom[i], 1);
+    for (i = 0; i < 8; i++) onewire_write(pin, rom[i], owDefaultPower);
 }
 
 //
@@ -227,13 +233,13 @@ void onewire_select(uint8_t pin, const uint8_t rom[8])
 //
 void onewire_skip(uint8_t pin)
 {
-    onewire_write(pin, 0xCC, 1);           // Skip ROM
+    onewire_write(pin, 0xCC, owDefaultPower);           // Skip ROM
 }
 
 void onewire_depower(uint8_t pin)
 {
 	noInterrupts();
-	platform_gpio_mode(pin, PLATFORM_GPIO_INPUT, PLATFORM_GPIO_FLOAT);
+	DIRECT_MODE_INPUT(pin);
 	interrupts();
 }
 
@@ -316,7 +322,7 @@ uint8_t onewire_search(uint8_t pin, uint8_t *newAddr)
       }
 
       // issue the search command
-      onewire_write(pin, 0xF0, 1);
+      onewire_write(pin, 0xF0, owDefaultPower);
 
       // loop to do the search
       do
@@ -400,12 +406,16 @@ uint8_t onewire_search(uint8_t pin, uint8_t *newAddr)
       LastDeviceFlag[pin] = FALSE;
       LastFamilyDiscrepancy[pin] = 0;
       search_result = FALSE;
-   } else {
-	  int i;
-      for (i = 0; i < 8; i++) newAddr[i] = ROM_NO[pin][i];
-   }   
+   }
+   else
+   {
+      for (rom_byte_number = 0; rom_byte_number < 8; rom_byte_number++)
+      {
+         newAddr[rom_byte_number] = ROM_NO[pin][rom_byte_number];
+      }
+   }
    return search_result;
-  }
+}
 
 #endif
 

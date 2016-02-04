@@ -1,12 +1,9 @@
 // Module for U8glib
 
-#include "lualib.h"
+#include "module.h"
 #include "lauxlib.h"
 #include "platform.h"
-#include "auxmods.h"
-#include "lrotable.h"
 
-//#include "c_string.h"
 #include "c_stdlib.h"
 
 #include "u8g.h"
@@ -15,9 +12,7 @@
 
 struct _lu8g_userdata_t
 {
-    u8g_t     u8g;
-    u8g_pb_t  pb;
-    u8g_dev_t dev;
+    u8g_t u8g;
 };
 
 typedef struct _lu8g_userdata_t lu8g_userdata_t;
@@ -68,6 +63,8 @@ static int lu8g_setFont( lua_State *L )
     u8g_fntpgm_uint8_t *font = (u8g_fntpgm_uint8_t *)lua_touserdata( L, 2 );
     if (font != NULL)
         u8g_SetFont( LU8G, font );
+    else
+        luaL_argerror(L, 2, "font data expected");
 
     return 0;
 }
@@ -304,32 +301,24 @@ static int lu8g_generic_drawStr( lua_State *L, uint8_t rot )
 // Lua: pix_len = u8g.drawStr( self, x, y, string )
 static int lu8g_drawStr( lua_State *L )
 {
-    lu8g_userdata_t *lud;
-
     return lu8g_generic_drawStr( L, 0 );
 }
 
 // Lua: pix_len = u8g.drawStr90( self, x, y, string )
 static int lu8g_drawStr90( lua_State *L )
 {
-    lu8g_userdata_t *lud;
-
     return lu8g_generic_drawStr( L, 1 );
 }
 
 // Lua: pix_len = u8g.drawStr180( self, x, y, string )
 static int lu8g_drawStr180( lua_State *L )
 {
-    lu8g_userdata_t *lud;
-
     return lu8g_generic_drawStr( L, 2 );
 }
 
 // Lua: pix_len = u8g.drawStr270( self, x, y, string )
 static int lu8g_drawStr270( lua_State *L )
 {
-    lu8g_userdata_t *lud;
-
     return lu8g_generic_drawStr( L, 3 );
 }
 
@@ -870,7 +859,7 @@ uint8_t u8g_com_esp8266_hw_spi_fn(u8g_t *u8g, uint8_t msg, uint8_t arg_val, void
         break;
     
     case U8G_COM_MSG_WRITE_BYTE:
-        platform_spi_send_recv( 1, arg_val );
+        platform_spi_send( 1, 8, arg_val );
         break;
     
     case U8G_COM_MSG_WRITE_SEQ:
@@ -879,7 +868,7 @@ uint8_t u8g_com_esp8266_hw_spi_fn(u8g_t *u8g, uint8_t msg, uint8_t arg_val, void
             register uint8_t *ptr = arg_ptr;
             while( arg_val > 0 )
             {
-                platform_spi_send_recv( 1, *ptr++ );
+                platform_spi_send( 1, 8, *ptr++ );
                 arg_val--;
             }
         }
@@ -969,298 +958,157 @@ static int lu8g_close_display( lua_State *L )
     if ((lud = get_lud( L )) == NULL)
         return 0;
 
-    // free up allocated page buffer
-    if (lud->pb.buf != NULL)
-    {
-        c_free( lud->pb.buf );
-        lud->pb.buf = NULL;
-    }
-
     return 0;
 }
 
 
-// device constructors
-
-uint8_t u8g_dev_ssd1306_128x64_fn(u8g_t *u8g, u8g_dev_t *dev, uint8_t msg, void *arg);
-// Lua: object = u8g.ssd1306_128x64_i2c( i2c_addr )
-static int lu8g_ssd1306_128x64_i2c( lua_State *L )
-{
-    unsigned addr = luaL_checkinteger( L, 1 );
-
-    if (addr == 0)
-        return luaL_error( L, "i2c address required" );
-
-    lu8g_userdata_t *lud = (lu8g_userdata_t *) lua_newuserdata( L, sizeof( lu8g_userdata_t ) );
-
-    lud->u8g.i2c_addr = (uint8_t)addr;
-
-    // Don't use the pre-defined device structure for u8g_dev_ssd1306_128x64_i2c here
-    // Reason: linking the pre-defined structures allocates RAM for the device/comm structure
-    //         *before* the display is constructed (especially the page buffers)
-    //         this consumes heap even when the device is not used at all
-#if 1
-    // build device entry
-    lud->dev = (u8g_dev_t){ u8g_dev_ssd1306_128x64_fn, &(lud->pb), U8G_COM_SSD_I2C };
-
-    // populate and allocate page buffer
-    // constants taken from u8g_dev_ssd1306_128x64.c:
-    //                     PAGE_HEIGHT
-    //                      | Height
-    //                      |  |              WIDTH
-    //                      |  |               |
-    lud->pb = (u8g_pb_t){ { 8, 64, 0, 0, 0 }, 128, NULL };
-    //
-    if ((lud->pb.buf = (void *)c_zalloc(lud->pb.width)) == NULL)
-        return luaL_error( L, "out of memory" );
-
-    // and finally init device using specific interface init function
-    u8g_InitI2C( LU8G, &(lud->dev), U8G_I2C_OPT_NONE);
-#else
-    u8g_InitI2C( LU8G, &u8g_dev_ssd1306_128x64_i2c, U8G_I2C_OPT_NONE);
-#endif
-
-
-    // set its metatable
-    luaL_getmetatable(L, "u8g.display");
-    lua_setmetatable(L, -2);
-
-    return 1;
-}
-
-// Lua: object = u8g.ssd1306_128x64_spi( cs, dc, [res] )
-static int lu8g_ssd1306_128x64_spi( lua_State *L )
-{
-    unsigned cs = luaL_checkinteger( L, 1 );
-    if (cs == 0)
-        return luaL_error( L, "CS pin required" );
-    unsigned dc = luaL_checkinteger( L, 2 );
-    if (dc == 0)
-        return luaL_error( L, "D/C pin required" );
-    unsigned res = luaL_optinteger( L, 3, U8G_PIN_NONE );
-
-    lu8g_userdata_t *lud = (lu8g_userdata_t *) lua_newuserdata( L, sizeof( lu8g_userdata_t ) );
-
-    // Don't use the pre-defined device structure for u8g_dev_ssd1306_128x64_spi here
-    // Reason: linking the pre-defined structures allocates RAM for the device/comm structure
-    //         *before* the display is constructed (especially the page buffers)
-    //         this consumes heap even when the device is not used at all
-#if 1
-    // build device entry
-    lud->dev = (u8g_dev_t){ u8g_dev_ssd1306_128x64_fn, &(lud->pb), U8G_COM_HW_SPI };
-
-    // populate and allocate page buffer
-    // constants taken from u8g_dev_ssd1306_128x64.c:
-    //                     PAGE_HEIGHT
-    //                      | Height
-    //                      |  |              WIDTH
-    //                      |  |               |
-    lud->pb = (u8g_pb_t){ { 8, 64, 0, 0, 0 }, 128, NULL };
-    //
-    if ((lud->pb.buf = (void *)c_zalloc(lud->pb.width)) == NULL)
-        return luaL_error( L, "out of memory" );
-
-    // and finally init device using specific interface init function
-    u8g_InitHWSPI( LU8G, &(lud->dev), cs, dc, res );
-#else
-    u8g_InitHWSPI( LU8G, &u8g_dev_ssd1306_128x64_spi, cs, dc, res );
-#endif
-
-
-    // set its metatable
-    luaL_getmetatable(L, "u8g.display");
-    lua_setmetatable(L, -2);
-
-    return 1;
-}
-
-uint8_t u8g_dev_pcd8544_fn(u8g_t *u8g, u8g_dev_t *dev, uint8_t msg, void *arg);
-// Lua: object = u8g.pcd8544_84x48( sce, dc, res )
-static int lu8g_pcd8544_84x48( lua_State *L )
-{
-    unsigned sce = luaL_checkinteger( L, 1 );
-    if (sce == 0)
-        return luaL_error( L, "SCE pin required" );
-    unsigned dc = luaL_checkinteger( L, 2 );
-    if (dc == 0)
-        return luaL_error( L, "D/C pin required" );
-    unsigned res = luaL_checkinteger( L, 3 );
-    if (res == 0)
-        return luaL_error( L, "RES pin required" );
-
-    lu8g_userdata_t *lud = (lu8g_userdata_t *) lua_newuserdata( L, sizeof( lu8g_userdata_t ) );
-
-    // Don't use the pre-defined device structure for u8g_dev_pcd8544_84x48_hw_spi here
-    // Reason: linking the pre-defined structures allocates RAM for the device/comm structure
-    //         *before* the display is constructed (especially the page buffers)
-    //         this consumes heap even when the device is not used at all
-#if 1
-    // build device entry
-    lud->dev = (u8g_dev_t){ u8g_dev_pcd8544_fn, &(lud->pb), U8G_COM_HW_SPI };
-
-    // populate and allocate page buffer
-    // constants taken from u8g_dev_pcd8544_84x48.c:
-    //                     PAGE_HEIGHT
-    //                      | Height
-    //                      |  |             WIDTH
-    //                      |  |              |
-    lud->pb = (u8g_pb_t){ { 8, 48, 0, 0, 0 }, 84, NULL };
-    //
-    if ((lud->pb.buf = (void *)c_zalloc(lud->pb.width)) == NULL)
-        return luaL_error( L, "out of memory" );
-
-    // and finally init device using specific interface init function
-    u8g_InitHWSPI( LU8G, &(lud->dev), sce, dc, res );
-#else
-    u8g_InitHWSPI( LU8G, &u8g_dev_pcd8544_84x48_hw_spi, sce, dc, res );
-#endif
-
-
-    // set its metatable
-    luaL_getmetatable(L, "u8g.display");
-    lua_setmetatable(L, -2);
-
-    return 1;
-}
+// ***************************************************************************
+// Device constructors
+//
+//
+// I2C based devices will use this function template to implement the Lua binding.
+#undef U8G_DISPLAY_TABLE_ENTRY
+#define U8G_DISPLAY_TABLE_ENTRY(device)                                 \
+    static int lu8g_ ## device( lua_State *L )                          \
+    {                                                                   \
+        unsigned addr = luaL_checkinteger( L, 1 );                      \
+                                                                        \
+        if (addr == 0)                                                  \
+            return luaL_error( L, "i2c address required" );             \
+                                                                        \
+        lu8g_userdata_t *lud = (lu8g_userdata_t *) lua_newuserdata( L, sizeof( lu8g_userdata_t ) ); \
+                                                                        \
+        lud->u8g.i2c_addr = (uint8_t)addr;                              \
+                                                                        \
+        u8g_InitI2C( LU8G, &u8g_dev_ ## device, U8G_I2C_OPT_NONE);      \
+                                                                        \
+        /* set its metatable */                                         \
+        luaL_getmetatable(L, "u8g.display");                            \
+        lua_setmetatable(L, -2);                                        \
+                                                                        \
+        return 1;                                                       \
+    } 
+//
+// Unroll the display table and insert binding functions for I2C based displays.
+U8G_DISPLAY_TABLE_I2C
+//
+//
+//
+// SPI based devices will use this function template to implement the Lua binding.
+#undef U8G_DISPLAY_TABLE_ENTRY
+#define U8G_DISPLAY_TABLE_ENTRY(device)                                 \
+    static int lu8g_ ## device( lua_State *L )                          \
+    {                                                                   \
+        unsigned cs = luaL_checkinteger( L, 1 );                        \
+        if (cs == 0)                                                    \
+            return luaL_error( L, "CS pin required" );                  \
+        unsigned dc = luaL_checkinteger( L, 2 );                        \
+        if (dc == 0)                                                    \
+            return luaL_error( L, "D/C pin required" );                 \
+        unsigned res = luaL_optinteger( L, 3, U8G_PIN_NONE );           \
+                                                                        \
+        lu8g_userdata_t *lud = (lu8g_userdata_t *) lua_newuserdata( L, sizeof( lu8g_userdata_t ) ); \
+                                                                        \
+        u8g_InitHWSPI( LU8G, &u8g_dev_ ## device, cs, dc, res );        \
+                                                                        \
+        /* set its metatable */                                         \
+        luaL_getmetatable(L, "u8g.display");                            \
+        lua_setmetatable(L, -2);                                        \
+                                                                        \
+        return 1;                                                       \
+    }
+//
+// Unroll the display table and insert binding functions for SPI based displays.
+U8G_DISPLAY_TABLE_SPI
+//
+// ***************************************************************************
 
 
 // Module function map
-#define MIN_OPT_LEVEL 2
-#include "lrodefs.h"
-
-static const LUA_REG_TYPE lu8g_display_map[] =
-{
-    { LSTRKEY( "begin" ),  LFUNCVAL( lu8g_begin ) },
-    { LSTRKEY( "drawBitmap" ),  LFUNCVAL( lu8g_drawBitmap ) },
-    { LSTRKEY( "drawBox" ),  LFUNCVAL( lu8g_drawBox ) },
-    { LSTRKEY( "drawCircle" ),  LFUNCVAL( lu8g_drawCircle ) },
-    { LSTRKEY( "drawDisc" ),  LFUNCVAL( lu8g_drawDisc ) },
-    { LSTRKEY( "drawEllipse" ),  LFUNCVAL( lu8g_drawEllipse ) },
-    { LSTRKEY( "drawFilledEllipse" ),  LFUNCVAL( lu8g_drawFilledEllipse ) },
-    { LSTRKEY( "drawFrame" ),  LFUNCVAL( lu8g_drawFrame ) },
-    { LSTRKEY( "drawHLine" ),  LFUNCVAL( lu8g_drawHLine ) },
-    { LSTRKEY( "drawLine" ),  LFUNCVAL( lu8g_drawLine ) },
-    { LSTRKEY( "drawPixel" ),  LFUNCVAL( lu8g_drawPixel ) },
-    { LSTRKEY( "drawRBox" ),  LFUNCVAL( lu8g_drawRBox ) },
-    { LSTRKEY( "drawRFrame" ),  LFUNCVAL( lu8g_drawRFrame ) },
-    { LSTRKEY( "drawStr" ),  LFUNCVAL( lu8g_drawStr ) },
-    { LSTRKEY( "drawStr90" ),  LFUNCVAL( lu8g_drawStr90 ) },
-    { LSTRKEY( "drawStr180" ),  LFUNCVAL( lu8g_drawStr180 ) },
-    { LSTRKEY( "drawStr270" ),  LFUNCVAL( lu8g_drawStr270 ) },
-    { LSTRKEY( "drawTriangle" ),  LFUNCVAL( lu8g_drawTriangle ) },
-    { LSTRKEY( "drawVLine" ),  LFUNCVAL( lu8g_drawVLine ) },
-    { LSTRKEY( "drawXBM" ),  LFUNCVAL( lu8g_drawXBM ) },
-    { LSTRKEY( "firstPage" ),  LFUNCVAL( lu8g_firstPage ) },
-    { LSTRKEY( "getColorIndex" ),  LFUNCVAL( lu8g_getColorIndex ) },
-    { LSTRKEY( "getFontAscent" ),  LFUNCVAL( lu8g_getFontAscent ) },
-    { LSTRKEY( "getFontDescent" ),  LFUNCVAL( lu8g_getFontDescent ) },
-    { LSTRKEY( "getFontLineSpacing" ),  LFUNCVAL( lu8g_getFontLineSpacing ) },
-    { LSTRKEY( "getHeight" ),  LFUNCVAL( lu8g_getHeight ) },
-    { LSTRKEY( "getMode" ),  LFUNCVAL( lu8g_getMode ) },
-    { LSTRKEY( "getStrWidth" ), LFUNCVAL( lu8g_getStrWidth ) },
-    { LSTRKEY( "getWidth" ),  LFUNCVAL( lu8g_getWidth ) },
-    { LSTRKEY( "nextPage" ),  LFUNCVAL( lu8g_nextPage ) },
-    { LSTRKEY( "setColorIndex" ),  LFUNCVAL( lu8g_setColorIndex ) },
-    { LSTRKEY( "setDefaultBackgroundColor" ),  LFUNCVAL( lu8g_setDefaultBackgroundColor ) },
-    { LSTRKEY( "setDefaultForegroundColor" ),  LFUNCVAL( lu8g_setDefaultForegroundColor ) },
-    { LSTRKEY( "setFont" ),  LFUNCVAL( lu8g_setFont ) },
-    { LSTRKEY( "setFontLineSpacingFactor" ),  LFUNCVAL( lu8g_setFontLineSpacingFactor ) },
-    { LSTRKEY( "setFontPosBaseline" ),  LFUNCVAL( lu8g_setFontPosBaseline ) },
-    { LSTRKEY( "setFontPosBottom" ),  LFUNCVAL( lu8g_setFontPosBottom ) },
-    { LSTRKEY( "setFontPosCenter" ),  LFUNCVAL( lu8g_setFontPosCenter ) },
-    { LSTRKEY( "setFontPosTop" ),  LFUNCVAL( lu8g_setFontPosTop ) },
-    { LSTRKEY( "setFontRefHeightAll" ),  LFUNCVAL( lu8g_setFontRefHeightAll ) },
-    { LSTRKEY( "setFontRefHeightExtendedText" ),  LFUNCVAL( lu8g_setFontRefHeightExtendedText ) },
-    { LSTRKEY( "setFontRefHeightText" ),  LFUNCVAL( lu8g_setFontRefHeightText ) },
-    { LSTRKEY( "setRot90" ),  LFUNCVAL( lu8g_setRot90 ) },
-    { LSTRKEY( "setRot180" ),  LFUNCVAL( lu8g_setRot180 ) },
-    { LSTRKEY( "setRot270" ),  LFUNCVAL( lu8g_setRot270 ) },
-    { LSTRKEY( "setScale2x2" ),  LFUNCVAL( lu8g_setScale2x2 ) },
-    { LSTRKEY( "sleepOff" ),  LFUNCVAL( lu8g_sleepOff ) },
-    { LSTRKEY( "sleepOn" ),  LFUNCVAL( lu8g_sleepOn ) },
-    { LSTRKEY( "undoRotation" ),  LFUNCVAL( lu8g_undoRotation ) },
-    { LSTRKEY( "undoScale" ),  LFUNCVAL( lu8g_undoScale ) },
-    { LSTRKEY( "__gc" ),  LFUNCVAL( lu8g_close_display ) },
-#if LUA_OPTIMIZE_MEMORY > 0
-    { LSTRKEY( "__index" ), LROVAL ( lu8g_display_map ) },
-#endif
-    { LNILKEY, LNILVAL }
+static const LUA_REG_TYPE lu8g_display_map[] = {
+  { LSTRKEY( "begin" ),                        LFUNCVAL( lu8g_begin ) },
+  { LSTRKEY( "drawBitmap" ),                   LFUNCVAL( lu8g_drawBitmap ) },
+  { LSTRKEY( "drawBox" ),                      LFUNCVAL( lu8g_drawBox ) },
+  { LSTRKEY( "drawCircle" ),                   LFUNCVAL( lu8g_drawCircle ) },
+  { LSTRKEY( "drawDisc" ),                     LFUNCVAL( lu8g_drawDisc ) },
+  { LSTRKEY( "drawEllipse" ),                  LFUNCVAL( lu8g_drawEllipse ) },
+  { LSTRKEY( "drawFilledEllipse" ),            LFUNCVAL( lu8g_drawFilledEllipse ) },
+  { LSTRKEY( "drawFrame" ),                    LFUNCVAL( lu8g_drawFrame ) },
+  { LSTRKEY( "drawHLine" ),                    LFUNCVAL( lu8g_drawHLine ) },
+  { LSTRKEY( "drawLine" ),                     LFUNCVAL( lu8g_drawLine ) },
+  { LSTRKEY( "drawPixel" ),                    LFUNCVAL( lu8g_drawPixel ) },
+  { LSTRKEY( "drawRBox" ),                     LFUNCVAL( lu8g_drawRBox ) },
+  { LSTRKEY( "drawRFrame" ),                   LFUNCVAL( lu8g_drawRFrame ) },
+  { LSTRKEY( "drawStr" ),                      LFUNCVAL( lu8g_drawStr ) },
+  { LSTRKEY( "drawStr90" ),                    LFUNCVAL( lu8g_drawStr90 ) },
+  { LSTRKEY( "drawStr180" ),                   LFUNCVAL( lu8g_drawStr180 ) },
+  { LSTRKEY( "drawStr270" ),                   LFUNCVAL( lu8g_drawStr270 ) },
+  { LSTRKEY( "drawTriangle" ),                 LFUNCVAL( lu8g_drawTriangle ) },
+  { LSTRKEY( "drawVLine" ),                    LFUNCVAL( lu8g_drawVLine ) },
+  { LSTRKEY( "drawXBM" ),                      LFUNCVAL( lu8g_drawXBM ) },
+  { LSTRKEY( "firstPage" ),                    LFUNCVAL( lu8g_firstPage ) },
+  { LSTRKEY( "getColorIndex" ),                LFUNCVAL( lu8g_getColorIndex ) },
+  { LSTRKEY( "getFontAscent" ),                LFUNCVAL( lu8g_getFontAscent ) },
+  { LSTRKEY( "getFontDescent" ),               LFUNCVAL( lu8g_getFontDescent ) },
+  { LSTRKEY( "getFontLineSpacing" ),           LFUNCVAL( lu8g_getFontLineSpacing ) },
+  { LSTRKEY( "getHeight" ),                    LFUNCVAL( lu8g_getHeight ) },
+  { LSTRKEY( "getMode" ),                      LFUNCVAL( lu8g_getMode ) },
+  { LSTRKEY( "getStrWidth" ),                  LFUNCVAL( lu8g_getStrWidth ) },
+  { LSTRKEY( "getWidth" ),                     LFUNCVAL( lu8g_getWidth ) },
+  { LSTRKEY( "nextPage" ),                     LFUNCVAL( lu8g_nextPage ) },
+  { LSTRKEY( "setColorIndex" ),                LFUNCVAL( lu8g_setColorIndex ) },
+  { LSTRKEY( "setDefaultBackgroundColor" ),    LFUNCVAL( lu8g_setDefaultBackgroundColor ) },
+  { LSTRKEY( "setDefaultForegroundColor" ),    LFUNCVAL( lu8g_setDefaultForegroundColor ) },
+  { LSTRKEY( "setFont" ),                      LFUNCVAL( lu8g_setFont ) },
+  { LSTRKEY( "setFontLineSpacingFactor" ),     LFUNCVAL( lu8g_setFontLineSpacingFactor ) },
+  { LSTRKEY( "setFontPosBaseline" ),           LFUNCVAL( lu8g_setFontPosBaseline ) },
+  { LSTRKEY( "setFontPosBottom" ),             LFUNCVAL( lu8g_setFontPosBottom ) },
+  { LSTRKEY( "setFontPosCenter" ),             LFUNCVAL( lu8g_setFontPosCenter ) },
+  { LSTRKEY( "setFontPosTop" ),                LFUNCVAL( lu8g_setFontPosTop ) },
+  { LSTRKEY( "setFontRefHeightAll" ),          LFUNCVAL( lu8g_setFontRefHeightAll ) },
+  { LSTRKEY( "setFontRefHeightExtendedText" ), LFUNCVAL( lu8g_setFontRefHeightExtendedText ) },
+  { LSTRKEY( "setFontRefHeightText" ),         LFUNCVAL( lu8g_setFontRefHeightText ) },
+  { LSTRKEY( "setRot90" ),                     LFUNCVAL( lu8g_setRot90 ) },
+  { LSTRKEY( "setRot180" ),                    LFUNCVAL( lu8g_setRot180 ) },
+  { LSTRKEY( "setRot270" ),                    LFUNCVAL( lu8g_setRot270 ) },
+  { LSTRKEY( "setScale2x2" ),                  LFUNCVAL( lu8g_setScale2x2 ) },
+  { LSTRKEY( "sleepOff" ),                     LFUNCVAL( lu8g_sleepOff ) },
+  { LSTRKEY( "sleepOn" ),                      LFUNCVAL( lu8g_sleepOn ) },
+  { LSTRKEY( "undoRotation" ),                 LFUNCVAL( lu8g_undoRotation ) },
+  { LSTRKEY( "undoScale" ),                    LFUNCVAL( lu8g_undoScale ) },
+  { LSTRKEY( "__gc" ),                         LFUNCVAL( lu8g_close_display ) },
+  { LSTRKEY( "__index" ),                      LROVAL( lu8g_display_map ) },
+  { LNILKEY, LNILVAL }
 };
 
-const LUA_REG_TYPE lu8g_map[] = 
-{
-#ifdef U8G_SSD1306_128x64_I2C
-    { LSTRKEY( "ssd1306_128x64_i2c" ), LFUNCVAL ( lu8g_ssd1306_128x64_i2c ) },
-#endif
-#ifdef U8G_SSD1306_128x64_I2C
-    { LSTRKEY( "ssd1306_128x64_spi" ), LFUNCVAL ( lu8g_ssd1306_128x64_spi ) },
-#endif
-#ifdef U8G_PCD8544_84x48
-    { LSTRKEY( "pcd8544_84x48" ), LFUNCVAL ( lu8g_pcd8544_84x48 ) },
-#endif
-
-#if LUA_OPTIMIZE_MEMORY > 0
-
-    // Register fonts
+#undef U8G_DISPLAY_TABLE_ENTRY
 #undef U8G_FONT_TABLE_ENTRY
-#define U8G_FONT_TABLE_ENTRY(font) { LSTRKEY( #font ), LUDATA( (void *)(u8g_ ## font) ) },
-    U8G_FONT_TABLE
 
-    // Options for circle/ ellipse drwing
-    { LSTRKEY( "DRAW_UPPER_RIGHT" ), LNUMVAL( U8G_DRAW_UPPER_RIGHT ) },
-    { LSTRKEY( "DRAW_UPPER_LEFT" ),  LNUMVAL( U8G_DRAW_UPPER_LEFT ) },
-    { LSTRKEY( "DRAW_LOWER_RIGHT" ), LNUMVAL( U8G_DRAW_LOWER_RIGHT ) },
-    { LSTRKEY( "DRAW_LOWER_LEFT" ),  LNUMVAL( U8G_DRAW_LOWER_LEFT ) },
-    { LSTRKEY( "DRAW_ALL" ),         LNUMVAL( U8G_DRAW_ALL ) },
-
-    // Display modes
-    { LSTRKEY( "MODE_BW" ),       LNUMVAL( U8G_MODE_BW ) },
-    { LSTRKEY( "MODE_GRAY2BIT" ), LNUMVAL( U8G_MODE_GRAY2BIT ) },
-
-    { LSTRKEY( "__metatable" ), LROVAL( lu8g_map ) },
-#endif
-    { LNILKEY, LNILVAL }
+static const LUA_REG_TYPE lu8g_map[] = {
+#define U8G_DISPLAY_TABLE_ENTRY(device) \
+  { LSTRKEY( #device ),            LFUNCVAL ( lu8g_ ##device ) },
+  U8G_DISPLAY_TABLE_I2C
+  U8G_DISPLAY_TABLE_SPI
+// Register fonts
+#define U8G_FONT_TABLE_ENTRY(font) \
+  { LSTRKEY( #font ),              LUDATA( (void *)(u8g_ ## font) ) },
+  U8G_FONT_TABLE
+  // Options for circle/ ellipse drawing
+  { LSTRKEY( "DRAW_UPPER_RIGHT" ), LNUMVAL( U8G_DRAW_UPPER_RIGHT ) },
+  { LSTRKEY( "DRAW_UPPER_LEFT" ),  LNUMVAL( U8G_DRAW_UPPER_LEFT ) },
+  { LSTRKEY( "DRAW_LOWER_RIGHT" ), LNUMVAL( U8G_DRAW_LOWER_RIGHT ) },
+  { LSTRKEY( "DRAW_LOWER_LEFT" ),  LNUMVAL( U8G_DRAW_LOWER_LEFT ) },
+  { LSTRKEY( "DRAW_ALL" ),         LNUMVAL( U8G_DRAW_ALL ) },
+  // Display modes
+  { LSTRKEY( "MODE_BW" ),          LNUMVAL( U8G_MODE_BW ) },
+  { LSTRKEY( "MODE_GRAY2BIT" ),    LNUMVAL( U8G_MODE_GRAY2BIT ) },
+  { LSTRKEY( "__metatable" ), LROVAL( lu8g_map ) },
+  { LNILKEY, LNILVAL }
 };
 
-LUALIB_API int luaopen_u8g( lua_State *L )
-{
-#if LUA_OPTIMIZE_MEMORY > 0
-    luaL_rometatable(L, "u8g.display", (void *)lu8g_display_map);  // create metatable
-    return 0;
-#else // #if LUA_OPTIMIZE_MEMORY > 0
-    int n;
-    luaL_register( L, AUXLIB_U8G, lu8g_map );
-
-    // Set it as its own metatable
-    lua_pushvalue( L, -1 );
-    lua_setmetatable( L, -2 );
-
-    // Module constants  
-
-    // Register fonts
-#undef U8G_FONT_TABLE_ENTRY
-#define U8G_FONT_TABLE_ENTRY(font) MOD_REG_LUDATA( L, #font, (void *)(u8g_ ## font) );
-    U8G_FONT_TABLE
-
-    // Options for circle/ ellipse drawing
-    MOD_REG_NUMBER( L, "DRAW_UPPER_RIGHT", U8G_DRAW_UPPER_RIGHT );
-    MOD_REG_NUMBER( L, "DRAW_UPPER_LEFT",  U8G_DRAW_UPPER_RIGHT );
-    MOD_REG_NUMBER( L, "DRAW_LOWER_RIGHT", U8G_DRAW_UPPER_RIGHT );
-    MOD_REG_NUMBER( L, "DRAW_LOWER_LEFT",  U8G_DRAW_UPPER_RIGHT );
-
-    // Display modes
-    MOD_REG_NUMBER( L, "MODE_BW",       U8G_MODE_BW );
-    MOD_REG_NUMBER( L, "MODE_GRAY2BIT", U8G_MODE_BW );
-
-    // create metatable
-    luaL_newmetatable(L, "u8g.display");
-    // metatable.__index = metatable
-    lua_pushliteral(L, "__index");
-    lua_pushvalue(L,-2);
-    lua_rawset(L,-3);
-    // Setup the methods inside metatable
-    luaL_register( L, NULL, u8g_display_map );
-
-    return 1;
-#endif // #if LUA_OPTIMIZE_MEMORY > 0  
+int luaopen_u8g( lua_State *L ) {
+  luaL_rometatable(L, "u8g.display", (void *)lu8g_display_map);  // create metatable
+  return 0;
 }
+
+NODEMCU_MODULE(U8G, "u8g", lu8g_map, luaopen_u8g);

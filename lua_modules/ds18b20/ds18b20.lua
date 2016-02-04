@@ -118,8 +118,6 @@ function readNumber(addr, unit)
           return nil
         end
         t = t / 10000
-        -- print("Temperature="..t1.."."..t2.." Centigrade")
-        -- result = t1.."."..t2
         return t
       end
       tmr.wdclr()

@@ -4,6 +4,7 @@
 #include "uart_register.h"
 #include "eagle_soc.h"
 #include "c_types.h"
+#include "os_type.h"
 
 #define RX_BUFF_SIZE    0x100
 #define TX_BUFF_SIZE    100
@@ -16,20 +17,20 @@ typedef enum {
 } UartBitsNum4Char;
 
 typedef enum {
-    ONE_STOP_BIT             = 0,
-    ONE_HALF_STOP_BIT        = BIT2,
-    TWO_STOP_BIT             = BIT2
+    ONE_STOP_BIT             = 0x1,
+    ONE_HALF_STOP_BIT        = 0x2,
+    TWO_STOP_BIT             = 0x3
 } UartStopBitsNum;
 
 typedef enum {
-    NONE_BITS = 0,
-    ODD_BITS   = 0,
-    EVEN_BITS = BIT4
+    NONE_BITS = 0x2,
+    ODD_BITS   = 1,
+    EVEN_BITS = 0
 } UartParityMode;
 
 typedef enum {
     STICK_PARITY_DIS   = 0,
-    STICK_PARITY_EN    = BIT3 | BIT5
+    STICK_PARITY_EN    = 1
 } UartExistParity;
 
 typedef enum {
@@ -100,7 +101,8 @@ typedef struct {
     int                      buff_uart_no;  //indicate which uart use tx/rx buffer
 } UartDevice;
 
-void uart_init(UartBautRate uart0_br, UartBautRate uart1_br);
+void uart_init(UartBautRate uart0_br, UartBautRate uart1_br, uint8 task_prio, os_signal_t sig_input);
+void uart0_alt(uint8 on);
 void uart0_sendStr(const char *str);
 void uart0_putc(const char c);
 void uart0_tx_buffer(uint8 *buf, uint16 len);

@@ -1,19 +1,15 @@
 // Module for coapwork
 
-//#include "lua.h"
-#include "lualib.h"
+#include "module.h"
 #include "lauxlib.h"
 #include "platform.h"
-#include "auxmods.h"
-#include "lrotable.h"
 
-#include "c_types.h"
-#include "c_stdio.h"
 #include "c_string.h"
 #include "c_stdlib.h"
-#include "os_type.h"
 
+#include "c_types.h"
 #include "mem.h"
+#include "lwip/ip_addr.h"
 #include "espconn.h"
 #include "driver/uart.h"
 
@@ -416,33 +412,8 @@ const LUA_REG_TYPE coap_map[] =
 
 LUALIB_API int luaopen_coap( lua_State *L )
 {
-#if LUA_OPTIMIZE_MEMORY > 0
   luaL_rometatable(L, "coap_client", (void *)coap_client_map);  // create metatable for coap_client  
   return 0;
-#else // #if LUA_OPTIMIZE_MEMORY > 0
-  int n;
-  luaL_register( L, AUXLIB_COAP, coap_map );
-
-  // Set it as its own metatable
-  lua_pushvalue( L, -1 );
-  lua_setmetatable( L, -2 );
-
-  // Module constants  
-  MOD_REG_NUMBER( L, "CON", COAP_TYPE_CON );
-  MOD_REG_NUMBER( L, "NON", COAP_TYPE_NONCON );
-
-  n = lua_gettop(L);
-
-  lua_settop(L, n);
-  // create metatable
-  luaL_newmetatable(L, "coap_client");
-  // metatable.__index = metatable
-  lua_pushliteral(L, "__index");
-  lua_pushvalue(L,-2);
-  lua_rawset(L,-3);
-  // Setup the methods inside metatable
-  luaL_register( L, NULL, coap_client_map );
-
-  return 1;
-#endif // #if LUA_OPTIMIZE_MEMORY > 0  
 }
+
+NODEMCU_MODULE(COAP, "coap", coap_map, luaopen_coap);

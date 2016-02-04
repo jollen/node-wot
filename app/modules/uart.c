@@ -1,11 +1,8 @@
 // Module for interfacing with serial
 
-//#include "lua.h"
-#include "lualib.h"
+#include "module.h"
 #include "lauxlib.h"
 #include "platform.h"
-#include "auxmods.h"
-#include "lrotable.h"
 
 #include "c_types.h"
 #include "c_string.h"
@@ -116,6 +113,17 @@ static int uart_setup( lua_State* L )
   return 1;
 }
 
+// Lua: alt( set )
+static int uart_alt( lua_State* L )
+{
+  unsigned set;
+  
+  set = luaL_checkinteger( L, 1 );
+
+  platform_uart_alt( set );
+  return 0;
+}
+
 // Lua: write( id, string1, [string2], ..., [stringn] )
 static int uart_write( lua_State* L )
 {
@@ -147,27 +155,18 @@ static int uart_write( lua_State* L )
 }
 
 // Module function map
-#define MIN_OPT_LEVEL 2
-#include "lrodefs.h"
-const LUA_REG_TYPE uart_map[] = 
-{
-  { LSTRKEY( "setup" ),  LFUNCVAL( uart_setup ) },
+static const LUA_REG_TYPE uart_map[] =  {
+  { LSTRKEY( "setup" ), LFUNCVAL( uart_setup ) },
   { LSTRKEY( "write" ), LFUNCVAL( uart_write ) },
-  { LSTRKEY( "on" ), LFUNCVAL( uart_on ) },
-#if LUA_OPTIMIZE_MEMORY > 0
-
-#endif
+  { LSTRKEY( "on" ),    LFUNCVAL( uart_on ) },
+  { LSTRKEY( "alt" ),   LFUNCVAL( uart_alt ) },
+  { LSTRKEY( "STOPBITS_1" ),   LNUMVAL( PLATFORM_UART_STOPBITS_1 ) },
+  { LSTRKEY( "STOPBITS_1_5" ), LNUMVAL( PLATFORM_UART_STOPBITS_1_5 ) },
+  { LSTRKEY( "STOPBITS_2" ),   LNUMVAL( PLATFORM_UART_STOPBITS_2 ) },
+  { LSTRKEY( "PARITY_NONE" ),  LNUMVAL( PLATFORM_UART_PARITY_NONE ) },
+  { LSTRKEY( "PARITY_EVEN" ),  LNUMVAL( PLATFORM_UART_PARITY_EVEN ) },
+  { LSTRKEY( "PARITY_ODD" ),   LNUMVAL( PLATFORM_UART_PARITY_ODD ) },
   { LNILKEY, LNILVAL }
 };
 
-LUALIB_API int luaopen_uart( lua_State *L )
-{
-#if LUA_OPTIMIZE_MEMORY > 0
-  return 0;
-#else // #if LUA_OPTIMIZE_MEMORY > 0
-  luaL_register( L, AUXLIB_UART, uart_map );
-  // Add constants
-
-  return 1;
-#endif // #if LUA_OPTIMIZE_MEMORY > 0  
-}
+NODEMCU_MODULE(UART, "uart", uart_map, NULL);

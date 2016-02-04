@@ -102,6 +102,9 @@ typedef void * (*lua_Alloc) (void *ud, void *ptr, size_t osize, size_t nsize);
 #include LUA_USER_H
 #endif
 
+#if defined(LUA_OPTIMIZE_DEBUG) && LUA_OPTIMIZE_DEBUG == 0
+#undef LUA_OPTIMIZE_DEBUG
+#endif
 
 /* type of numbers in Lua */
 typedef LUA_NUMBER lua_Number;
@@ -258,7 +261,7 @@ LUA_API void lua_setallocf (lua_State *L, lua_Alloc f, void *ud);
 
 
 
-/* 
+/*
 ** ===============================================================
 ** some useful macros
 ** ===============================================================
@@ -389,6 +392,10 @@ typedef struct __lua_load{
 }lua_Load;
 
 int lua_main( int argc, char **argv );
+
+#ifndef LUA_CROSS_COMPILER
+void lua_handle_input (bool force);
+#endif
 
 /******************************************************************************
 * Copyright (C) 1994-2008 Lua.org, PUC-Rio.  All rights reserved.

@@ -1,17 +1,15 @@
 // Module for mqtt
 
-//#include "lua.h"
-#include "lualib.h"
+#include "module.h"
 #include "lauxlib.h"
 #include "platform.h"
-#include "auxmods.h"
-#include "lrotable.h"
 
 #include "c_string.h"
 #include "c_stdlib.h"
 
 #include "c_types.h"
 #include "mem.h"
+#include "lwip/ip_addr.h"
 #include "espconn.h"
 
 #include "mqtt_msg.h"
@@ -67,7 +65,9 @@ typedef struct lmqtt_userdata
   mqtt_connect_info_t connect_info;
   uint16_t keep_alive_tick;
   uint32_t event_timeout;
+#ifdef CLIENT_SSL_ENABLE
   uint8_t secure;
+#endif
   bool connected;     // indicate socket connected, not mqtt prot connected.
   ETSTimer mqttTimer;
   tConnState connState;
@@ -228,10 +228,16 @@ READPACKET:
       if(mqtt_get_type(in_buffer) != MQTT_MSG_TYPE_CONNACK){
         NODE_DBG("MQTT: Invalid packet\r\n");
         mud->connState = MQTT_INIT;
+#ifdef CLIENT_SSL_ENABLE
         if(mud->secure)
+        {
           espconn_secure_disconnect(pesp_conn);
+        }
         else
+#endif
+        {
           espconn_disconnect(pesp_conn);
+        }
       } else {
         mud->connState = MQTT_DATA;
         NODE_DBG("MQTT: Connected\r\n");
@@ -288,12 +294,12 @@ READPACKET:
         case MQTT_MSG_TYPE_PUBLISH:
           if(msg_qos == 1){
             temp_msg = mqtt_msg_puback(&mud->mqtt_state.mqtt_connection, msg_id);
-            node = msg_enqueue(&(mud->mqtt_state.pending_msg_q), temp_msg, 
+            node = msg_enqueue(&(mud->mqtt_state.pending_msg_q), temp_msg,
                       msg_id, MQTT_MSG_TYPE_PUBACK, (int)mqtt_get_qos(temp_msg->data) );
           }
           else if(msg_qos == 2){
             temp_msg = mqtt_msg_pubrec(&mud->mqtt_state.mqtt_connection, msg_id);
-            node = msg_enqueue(&(mud->mqtt_state.pending_msg_q), temp_msg, 
+            node = msg_enqueue(&(mud->mqtt_state.pending_msg_q), temp_msg,
                       msg_id, MQTT_MSG_TYPE_PUBREC, (int)mqtt_get_qos(temp_msg->data) );
           }
           if(msg_qos == 1 || msg_qos == 2){
@@ -319,11 +325,11 @@ READPACKET:
           break;
         case MQTT_MSG_TYPE_PUBREC:
           if(pending_msg && pending_msg->msg_type == MQTT_MSG_TYPE_PUBLISH && pending_msg->msg_id == msg_id){
-            NODE_DBG("MQTT: Publish  with QoS = 2 Received PUBREC\r\n"); 
+            NODE_DBG("MQTT: Publish  with QoS = 2 Received PUBREC\r\n");
             // Note: actrually, should not destroy the msg until PUBCOMP is received.
             msg_destroy(msg_dequeue(&(mud->mqtt_state.pending_msg_q)));
             temp_msg = mqtt_msg_pubrel(&mud->mqtt_state.mqtt_connection, msg_id);
-            node = msg_enqueue(&(mud->mqtt_state.pending_msg_q), temp_msg, 
+            node = msg_enqueue(&(mud->mqtt_state.pending_msg_q), temp_msg,
                       msg_id, MQTT_MSG_TYPE_PUBREL, (int)mqtt_get_qos(temp_msg->data) );
             NODE_DBG("MQTT: Response PUBREL\r\n");
           }
@@ -332,7 +338,7 @@ READPACKET:
           if(pending_msg && pending_msg->msg_type == MQTT_MSG_TYPE_PUBREC && pending_msg->msg_id == msg_id){
             msg_destroy(msg_dequeue(&(mud->mqtt_state.pending_msg_q)));
             temp_msg = mqtt_msg_pubcomp(&mud->mqtt_state.mqtt_connection, msg_id);
-            node = msg_enqueue(&(mud->mqtt_state.pending_msg_q), temp_msg, 
+            node = msg_enqueue(&(mud->mqtt_state.pending_msg_q), temp_msg,
                       msg_id, MQTT_MSG_TYPE_PUBCOMP, (int)mqtt_get_qos(temp_msg->data) );
             NODE_DBG("MQTT: Response PUBCOMP\r\n");
           }
@@ -354,7 +360,7 @@ READPACKET:
           break;
         case MQTT_MSG_TYPE_PINGREQ:
             temp_msg = mqtt_msg_pingresp(&mud->mqtt_state.mqtt_connection);
-            node = msg_enqueue(&(mud->mqtt_state.pending_msg_q), temp_msg, 
+            node = msg_enqueue(&(mud->mqtt_state.pending_msg_q), temp_msg,
                       msg_id, MQTT_MSG_TYPE_PINGRESP, (int)mqtt_get_qos(temp_msg->data) );
             NODE_DBG("MQTT: Response PINGRESP\r\n");
           break;
@@ -386,10 +392,16 @@ READPACKET:
   if(node && (1==msg_size(&(mud->mqtt_state.pending_msg_q))) && mud->event_timeout == 0){
     mud->event_timeout = MQTT_SEND_TIMEOUT;
     NODE_DBG("Sent: %d\n", node->msg.length);
+#ifdef CLIENT_SSL_ENABLE
     if( mud->secure )
+    {
       espconn_secure_sent( pesp_conn, node->msg.data, node->msg.length );
+    }
     else
+#endif
+    {
       espconn_sent( pesp_conn, node->msg.data, node->msg.length );
+    }
   }
   NODE_DBG("receive, queue size: %d\n", msg_size(&(mud->mqtt_state.pending_msg_q)));
   NODE_DBG("leave mqtt_socket_received.\n");
@@ -430,7 +442,7 @@ static void mqtt_socket_sent(void *arg)
 		lua_rawgeti(mud->L, LUA_REGISTRYINDEX, mud->cb_puback_ref);
 		lua_rawgeti(mud->L, LUA_REGISTRYINDEX, mud->self_ref);  // pass the userdata to callback func in lua
 		lua_call(mud->L, 1, 0);
-  } else if(node && node->msg_type == MQTT_MSG_TYPE_PUBACK && node->publish_qos == 1) {
+  } else if(node && node->msg_type == MQTT_MSG_TYPE_PUBACK) {
     msg_destroy(msg_dequeue(&(mud->mqtt_state.pending_msg_q)));
   } else if(node && node->msg_type == MQTT_MSG_TYPE_PUBCOMP) {
     msg_destroy(msg_dequeue(&(mud->mqtt_state.pending_msg_q)));
@@ -462,10 +474,16 @@ static void mqtt_socket_connected(void *arg)
   NODE_DBG("Send MQTT connection infomation, data len: %d, d[0]=%d \r\n", temp_msg->length,  temp_msg->data[0]);
   mud->event_timeout = MQTT_SEND_TIMEOUT;
   // not queue this message. should send right now. or should enqueue this before head.
+#ifdef CLIENT_SSL_ENABLE
   if(mud->secure)
+  {
     espconn_secure_sent(pesp_conn, temp_msg->data, temp_msg->length);
+  }
   else
+#endif
+  {
     espconn_sent(pesp_conn, temp_msg->data, temp_msg->length);
+  }
   mud->keep_alive_tick = 0;
 
   mud->connState = MQTT_CONNECT_SENDING;
@@ -507,10 +525,16 @@ void mqtt_socket_timer(void *arg)
   } else if(mud->connState == MQTT_CONNECT_SENDING){ // MQTT_CONNECT send time out.
     NODE_DBG("sSend MQTT_CONNECT failed.\n");
     mud->connState = MQTT_INIT;
+#ifdef CLIENT_SSL_ENABLE
     if(mud->secure)
+    {
       espconn_secure_disconnect(mud->pesp_conn);
-    else 
+    }
+    else
+#endif
+    {
       espconn_disconnect(mud->pesp_conn);
+    }
     mud->keep_alive_tick = 0; // not need count anymore
   } else if(mud->connState == MQTT_CONNECT_SENT){ // wait for CONACK time out.
     NODE_DBG("MQTT_CONNECT failed.\n");
@@ -518,10 +542,16 @@ void mqtt_socket_timer(void *arg)
     msg_queue_t *pending_msg = msg_peek(&(mud->mqtt_state.pending_msg_q));
     if(pending_msg){
       mud->event_timeout = MQTT_SEND_TIMEOUT;
+#ifdef CLIENT_SSL_ENABLE
       if(mud->secure)
+      {
         espconn_secure_sent(mud->pesp_conn, pending_msg->msg.data, pending_msg->msg.length);
+      }
       else
+#endif
+      {
         espconn_sent(mud->pesp_conn, pending_msg->msg.data, pending_msg->msg.length);
+      }
       mud->keep_alive_tick = 0;
       NODE_DBG("id: %d - qos: %d, length: %d\n", pending_msg->msg_id, pending_msg->publish_qos, pending_msg->msg.length);
     } else {
@@ -533,13 +563,19 @@ void mqtt_socket_timer(void *arg)
         mqtt_msg_init(&mud->mqtt_state.mqtt_connection, temp_buffer, MQTT_BUF_SIZE);
         NODE_DBG("\r\nMQTT: Send keepalive packet\r\n");
         mqtt_message_t* temp_msg = mqtt_msg_pingreq(&mud->mqtt_state.mqtt_connection);
-        msg_queue_t *node = msg_enqueue( &(mud->mqtt_state.pending_msg_q), temp_msg, 
+        msg_queue_t *node = msg_enqueue( &(mud->mqtt_state.pending_msg_q), temp_msg,
                             0, MQTT_MSG_TYPE_PINGREQ, (int)mqtt_get_qos(temp_msg->data) );
         // only one message in queue, send immediately.
+#ifdef CLIENT_SSL_ENABLE
         if(mud->secure)
+        {
           espconn_secure_sent(mud->pesp_conn, temp_msg->data, temp_msg->length);
+        }
         else
+#endif
+        {
           espconn_sent(mud->pesp_conn, temp_msg->data, temp_msg->length);
+        }
         mud->keep_alive_tick = 0;
       }
     }
@@ -548,7 +584,7 @@ void mqtt_socket_timer(void *arg)
   NODE_DBG("leave mqtt_socket_timer.\n");
 }
 
-// Lua: mqtt.Client(clientid, keepalive, user, pass)
+// Lua: mqtt.Client(clientid, keepalive, user, pass, clean_session)
 static int mqtt_socket_client( lua_State* L )
 {
   NODE_DBG("enter mqtt_socket_client.\n");
@@ -558,13 +594,13 @@ static int mqtt_socket_client( lua_State* L )
   c_sprintf(tempid, "%s%x", "NodeMCU_", system_get_chip_id() );
   NODE_DBG(tempid);
   NODE_DBG("\n");
-  
+
   const char *clientId = tempid, *username = NULL, *password = NULL;
   size_t idl = c_strlen(tempid);
   size_t unl = 0, pwl = 0;
   int keepalive = 0;
   int stack = 1;
-  unsigned secure = 0;
+  int clean_session = 1;
   int top = lua_gettop(L);
 
   // create a object
@@ -579,7 +615,9 @@ static int mqtt_socket_client( lua_State* L )
   mud->cb_suback_ref = LUA_NOREF;
   mud->cb_puback_ref = LUA_NOREF;
   mud->pesp_conn = NULL;
+#ifdef CLIENT_SSL_ENABLE
   mud->secure = 0;
+#endif
 
   mud->keep_alive_tick = 0;
   mud->event_timeout = 0;
@@ -602,7 +640,7 @@ static int mqtt_socket_client( lua_State* L )
   }
 
   if(lua_isnumber( L, stack ))
-  {   
+  {
     keepalive = luaL_checkinteger( L, stack);
     stack++;
   }
@@ -626,6 +664,16 @@ static int mqtt_socket_client( lua_State* L )
   if(password == NULL)
     pwl = 0;
   NODE_DBG("lengh password: %d\r\n", pwl);
+
+  if(lua_isnumber( L, stack ))
+  {
+    clean_session = luaL_checkinteger( L, stack);
+    stack++;
+  }
+
+  if(clean_session > 1){
+    clean_session = 1;
+  }
 
   // TODO: check the zalloc result.
   mud->connect_info.client_id = (uint8_t *)c_zalloc(idl+1);
@@ -653,10 +701,10 @@ static int mqtt_socket_client( lua_State* L )
   mud->connect_info.username[unl] = 0;
   c_memcpy(mud->connect_info.password, password, pwl);
   mud->connect_info.password[pwl] = 0;
-  
+
   NODE_DBG("MQTT: Init info: %s, %s, %s\r\n", mud->connect_info.client_id, mud->connect_info.username, mud->connect_info.password);
 
-  mud->connect_info.clean_session = 1;
+  mud->connect_info.clean_session = clean_session;
   mud->connect_info.will_qos = 0;
   mud->connect_info.will_retain = 0;
   mud->connect_info.keepalive = keepalive;
@@ -752,7 +800,7 @@ static int mqtt_delete( lua_State* L )
   }
   lua_gc(L, LUA_GCRESTART, 0);
   NODE_DBG("leave mqtt_delete.\n");
-  return 0;  
+  return 0;
 }
 
 static void socket_connect(struct espconn *pesp_conn)
@@ -766,13 +814,19 @@ static void socket_connect(struct espconn *pesp_conn)
 
   mud->event_timeout = MQTT_CONNECT_TIMEOUT;
   mud->connState = MQTT_INIT;
+#ifdef CLIENT_SSL_ENABLE
   if(mud->secure)
+  {
     espconn_secure_connect(pesp_conn);
+  }
   else
+#endif
+  {
     espconn_connect(pesp_conn);
+  }
 
   os_timer_arm(&mud->mqttTimer, 1000, 1);
-  
+
   NODE_DBG("leave socket_connect.\n");
 }
 
@@ -902,7 +956,14 @@ static int mqtt_socket_connect( lua_State* L )
   } else {
     secure = 0; // default to 0
   }
+#ifdef CLIENT_SSL_ENABLE
   mud->secure = secure; // save
+#else
+  if ( secure )
+  {
+    return luaL_error(L, "ssl not available");
+  }
+#endif
 
   if ( (stack<=top) && lua_isnumber(L, stack) )
   {
@@ -973,24 +1034,28 @@ static int mqtt_socket_close( lua_State* L )
   // Send disconnect message
   mqtt_message_t* temp_msg = mqtt_msg_disconnect(&mud->mqtt_state.mqtt_connection);
   NODE_DBG("Send MQTT disconnect infomation, data len: %d, d[0]=%d \r\n", temp_msg->length,  temp_msg->data[0]);
+#ifdef CLIENT_SSL_ENABLE
   if(mud->secure)
     espconn_secure_sent(mud->pesp_conn, temp_msg->data, temp_msg->length);
   else
+#endif
     espconn_sent(mud->pesp_conn, temp_msg->data, temp_msg->length);
 
   mud->mqtt_state.auto_reconnect = 0;   // stop auto reconnect.
 
+#ifdef CLIENT_SSL_ENABLE
   if(mud->secure){
     if(mud->pesp_conn->proto.tcp->remote_port || mud->pesp_conn->proto.tcp->local_port)
       espconn_secure_disconnect(mud->pesp_conn);
   }
   else
+#endif
   {
     if(mud->pesp_conn->proto.tcp->remote_port || mud->pesp_conn->proto.tcp->local_port)
       espconn_disconnect(mud->pesp_conn);
   }
   NODE_DBG("leave mqtt_socket_close.\n");
-  return 0;  
+  return 0;
 }
 
 // Lua: mqtt:on( "method", function() )
@@ -1125,7 +1190,7 @@ static int mqtt_socket_subscribe( lua_State* L ) {
     mud->cb_suback_ref = luaL_ref( L, LUA_REGISTRYINDEX );
   }
 
-  msg_queue_t *node = msg_enqueue( &(mud->mqtt_state.pending_msg_q), temp_msg, 
+  msg_queue_t *node = msg_enqueue( &(mud->mqtt_state.pending_msg_q), temp_msg,
                             msg_id, MQTT_MSG_TYPE_SUBSCRIBE, (int)mqtt_get_qos(temp_msg->data) );
 
   NODE_DBG("topic: %s - id: %d - qos: %d, length: %d\n", topic, node->msg_id, node->publish_qos, node->msg.length);
@@ -1133,10 +1198,16 @@ static int mqtt_socket_subscribe( lua_State* L ) {
   if(node && (1==msg_size(&(mud->mqtt_state.pending_msg_q))) && mud->event_timeout == 0){
   	mud->event_timeout = MQTT_SEND_TIMEOUT;
   	NODE_DBG("Sent: %d\n", node->msg.length);
+#ifdef CLIENT_SSL_ENABLE
   	if( mud->secure )
-  		espconn_secure_sent( mud->pesp_conn, node->msg.data, node->msg.length );
+        {
+          espconn_secure_sent( mud->pesp_conn, node->msg.data, node->msg.length );
+        }
   	else
-  		espconn_sent( mud->pesp_conn, node->msg.data, node->msg.length );
+#endif
+        {
+          espconn_sent( mud->pesp_conn, node->msg.data, node->msg.length );
+        }
     mud->keep_alive_tick = 0;
   }
 
@@ -1209,16 +1280,22 @@ static int mqtt_socket_publish( lua_State* L )
     mud->cb_puback_ref = luaL_ref(L, LUA_REGISTRYINDEX);
   }
 
-  msg_queue_t *node = msg_enqueue(&(mud->mqtt_state.pending_msg_q), temp_msg, 
+  msg_queue_t *node = msg_enqueue(&(mud->mqtt_state.pending_msg_q), temp_msg,
                       msg_id, MQTT_MSG_TYPE_PUBLISH, (int)qos );
 
   if(node && (1==msg_size(&(mud->mqtt_state.pending_msg_q))) && mud->event_timeout == 0){
     mud->event_timeout = MQTT_SEND_TIMEOUT;
     NODE_DBG("Sent: %d\n", node->msg.length);
+#ifdef CLIENT_SSL_ENABLE
     if( mud->secure )
+    {
       espconn_secure_sent( mud->pesp_conn, node->msg.data, node->msg.length );
+    }
     else
+#endif
+    {
       espconn_sent( mud->pesp_conn, node->msg.data, node->msg.length );
+    }
     mud->keep_alive_tick = 0;
   }
 
@@ -1263,7 +1340,7 @@ static int mqtt_socket_lwt( lua_State* L )
   {
     return luaL_error( L, "need lwt message");
   }
-
+  stack++;
   if(mud->connect_info.will_topic){    // free the previous one if there is any
     c_free(mud->connect_info.will_topic);
     mud->connect_info.will_topic = NULL;
@@ -1312,59 +1389,28 @@ static int mqtt_socket_lwt( lua_State* L )
 }
 
 // Module function map
-#define MIN_OPT_LEVEL 2
-#include "lrodefs.h"
-
-static const LUA_REG_TYPE mqtt_socket_map[] =
-{
-  { LSTRKEY( "connect" ), LFUNCVAL ( mqtt_socket_connect ) },
-  { LSTRKEY( "close" ), LFUNCVAL ( mqtt_socket_close ) },
-  { LSTRKEY( "publish" ), LFUNCVAL ( mqtt_socket_publish ) },
-  { LSTRKEY( "subscribe" ), LFUNCVAL ( mqtt_socket_subscribe ) },
-  { LSTRKEY( "lwt" ), LFUNCVAL ( mqtt_socket_lwt ) },
-  { LSTRKEY( "on" ), LFUNCVAL ( mqtt_socket_on ) },
-  { LSTRKEY( "__gc" ), LFUNCVAL ( mqtt_delete ) },
-#if LUA_OPTIMIZE_MEMORY > 0
-  { LSTRKEY( "__index" ), LROVAL ( mqtt_socket_map ) },
-#endif
+static const LUA_REG_TYPE mqtt_socket_map[] = {
+  { LSTRKEY( "connect" ),   LFUNCVAL( mqtt_socket_connect ) },
+  { LSTRKEY( "close" ),     LFUNCVAL( mqtt_socket_close ) },
+  { LSTRKEY( "publish" ),   LFUNCVAL( mqtt_socket_publish ) },
+  { LSTRKEY( "subscribe" ), LFUNCVAL( mqtt_socket_subscribe ) },
+  { LSTRKEY( "lwt" ),       LFUNCVAL( mqtt_socket_lwt ) },
+  { LSTRKEY( "on" ),        LFUNCVAL( mqtt_socket_on ) },
+  { LSTRKEY( "__gc" ),      LFUNCVAL( mqtt_delete ) },
+  { LSTRKEY( "__index" ),   LROVAL( mqtt_socket_map ) },
   { LNILKEY, LNILVAL }
 };
 
-const LUA_REG_TYPE mqtt_map[] = 
-{
-  { LSTRKEY( "Client" ), LFUNCVAL ( mqtt_socket_client ) },
-#if LUA_OPTIMIZE_MEMORY > 0
-
+static const LUA_REG_TYPE mqtt_map[] = {
+  { LSTRKEY( "Client" ),      LFUNCVAL( mqtt_socket_client ) },
   { LSTRKEY( "__metatable" ), LROVAL( mqtt_map ) },
-#endif
   { LNILKEY, LNILVAL }
 };
 
-LUALIB_API int luaopen_mqtt( lua_State *L )
+int luaopen_mqtt( lua_State *L )
 {
-#if LUA_OPTIMIZE_MEMORY > 0
   luaL_rometatable(L, "mqtt.socket", (void *)mqtt_socket_map);  // create metatable for mqtt.socket
   return 0;
-#else // #if LUA_OPTIMIZE_MEMORY > 0
-  int n;
-  luaL_register( L, AUXLIB_MQTT, mqtt_map );
-
-  // Set it as its own metatable
-  lua_pushvalue( L, -1 );
-  lua_setmetatable( L, -2 );
-
-  // Module constants  
-  // MOD_REG_NUMBER( L, "TCP", TCP );
-
-  // create metatable
-  luaL_newmetatable(L, "mqtt.socket");
-  // metatable.__index = metatable
-  lua_pushliteral(L, "__index");
-  lua_pushvalue(L,-2);
-  lua_rawset(L,-3);
-  // Setup the methods inside metatable
-  luaL_register( L, NULL, mqtt_socket_map );
-
-  return 1;
-#endif // #if LUA_OPTIMIZE_MEMORY > 0  
 }
+
+NODEMCU_MODULE(MQTT, "mqtt", mqtt_map, luaopen_mqtt);

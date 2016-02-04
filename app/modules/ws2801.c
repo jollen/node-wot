@@ -1,8 +1,6 @@
-#include "lualib.h"
+#include "module.h"
 #include "lauxlib.h"
 #include "platform.h"
-#include "auxmods.h"
-#include "lrotable.h"
 #include "c_stdlib.h"
 #include "c_string.h"
 
@@ -115,26 +113,20 @@ static int ICACHE_FLASH_ATTR ws2801_writergb(lua_State* L) {
 
     os_delay_us(10);
 
-    os_intr_lock();
+    ets_intr_lock();
 
     ws2801_strip(buffer, length);
 
-    os_intr_unlock();
+    ets_intr_unlock();
 
     return 0;
 }
 
-#define MIN_OPT_LEVEL 2
-#include "lrodefs.h"
-const LUA_REG_TYPE ws2801_map[] =
+static const LUA_REG_TYPE ws2801_map[] =
 {
     { LSTRKEY( "write" ), LFUNCVAL( ws2801_writergb )},
     { LSTRKEY( "init" ), LFUNCVAL( ws2801_init_lua )},
     { LNILKEY, LNILVAL}
 };
 
-LUALIB_API int luaopen_ws2801(lua_State *L) {
-    LREGISTER(L, "ws2801", ws2801_map);
-    return 1;
-}
-
+NODEMCU_MODULE(WS2801, "ws2801", ws2801_map, NULL);
